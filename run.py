@@ -218,7 +218,16 @@ def _bulk_endpoints(dev):
 
 def send_frame(dev, payload):
     ep_out = _bulk_endpoints(dev)[1]
-    ep_out.write(struct.pack("<I", len(payload)) + bytes(payload))
+    ep_out.write(struct.pack("<I", len(payload)) + bytes(payload), timeout=3000)
+
+
+def send_messages(dev, msgs):
+    if not msgs:
+        return
+    ep_out = _bulk_endpoints(dev)[1]
+    buf = b"".join(struct.pack("<I", len(m)) + m for m in msgs if m)
+    if buf:
+        ep_out.write(buf, timeout=3000)
 
 
 def receive_frame(dev, timeout=0.2):
@@ -271,6 +280,8 @@ class TKApp:
         self._poller = None
         self._subscribed = None
         self._sub_lock = threading.Lock()
+        self._last_write_err = 0.0
+        self._write_err_count = 0
 
         self._build_ui()
         self._refresh_devices()
@@ -484,13 +495,21 @@ class TKApp:
                 events = poller.readQueue()
                 with self._sub_lock:
                     subscribed = self._subscribed
+                pending = []
                 for ev in events:
                     msg = handle_event(ev, subscribed=subscribed)
                     if msg:
-                        try:
-                            send_frame(dev, msg.encode("utf-8"))
-                        except Exception as e:
-                            self.root.after(0, self._log, f"USB write error: {_usb_error_hint(e)}")
+                        pending.append(msg.encode("utf-8"))
+                if pending:
+                    try:
+                        send_messages(dev, pending)
+                    except Exception as e:
+                        now = time.monotonic()
+                        self._write_err_count += 1
+                        if now - self._last_write_err > 3:
+                            self.root.after(0, self._log, f"USB write error (x{self._write_err_count}): {_usb_error_hint(e)}")
+                            self._last_write_err = now
+                            self._write_err_count = 0
                 time.sleep(0.02)
 
         except Exception as e:
