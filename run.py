@@ -22,7 +22,7 @@ DESCRIPTION = "NT over USB"
 VERSION = "1.0"
 URI = ""
 SERIAL = ""
-TOPIC_RESEND_INTERVAL = 2.0
+TOPIC_RESEND_INTERVAL = 10.0
 
 _registry = SchemaRegistry()
 _EP_CACHE = {}
@@ -229,72 +229,53 @@ def _bulk_endpoints(dev):
 
 
 def send_frame(dev, payload):
+    # No length-prefix framing on the wire -- the device speaks plain
+    # newline-delimited JSON. `payload` already ends in "\n" (see
+    # build_message / _send_topic_listing), so just write it as-is.
     ep_out = _bulk_endpoints(dev)[1]
-    ep_out.write(struct.pack("<I", len(payload)) + bytes(payload), timeout=3000)
+    ep_out.write(bytes(payload), timeout=3000)
 
 
 def send_messages(dev, msgs):
     if not msgs:
         return
     ep_out = _bulk_endpoints(dev)[1]
-    buf = b"".join(struct.pack("<I", len(m)) + m for m in msgs if m)
+    buf = b"".join(m for m in msgs if m)
     if buf:
         ep_out.write(buf, timeout=3000)
 
 
-def receive_frame(dev, timeout=0.2, max_wait=2.0):
-    # Reads a 4-byte little-endian length prefix followed by that many
-    # payload bytes. The phone side may write the header and payload as
-    # separate USB transactions, so a single 200ms slice timing out with a
-    # partially-read header/payload is NOT fatal -- keep retrying within a
-    # longer overall deadline. Only raise (a real fault) if we've made no
-    # progress for the whole max_wait window.
-    #
-    # NOTE: if a stall consistently happens at a fixed byte count that is an
-    # exact multiple of ep_in.wMaxPacketSize, that's the classic USB
-    # zero-length-packet (ZLP) termination issue: the device wrote exactly N
-    # * wMaxPacketSize bytes and never followed up with a short/zero packet,
-    # so the host has no way to know the transfer ended. That needs a fix on
-    # the device side (send a trailing ZLP, or avoid exact-multiple sizes),
-    # not here.
+_RECV_BUF = {}
+
+
+def receive_line(dev, timeout=0.2, max_read=65536):
+    # The device speaks plain newline-delimited JSON with no length prefix.
+    # A single USB read may contain a partial line, exactly one line, or
+    # multiple lines concatenated -- so we keep a small per-device buffer
+    # across calls and hand back one complete line (without the newline)
+    # at a time.
+    key = (dev.bus, dev.address)
+    buf = _RECV_BUF.setdefault(key, bytearray())
+
+    idx = buf.find(b"\n")
+    if idx != -1:
+        line = bytes(buf[:idx])
+        del buf[:idx + 1]
+        return line
+
     ep_in = _bulk_endpoints(dev)[0]
-    buf = bytearray()
-    deadline = time.monotonic() + max_wait
-    while len(buf) < 4:
-        try:
-            buf += bytes(ep_in.read(4 - len(buf), int(timeout * 1000)))
-            deadline = time.monotonic() + max_wait  # progress made, extend deadline
-        except usb.core.USBTimeoutError:
-            if len(buf) == 0:
-                return None  # nothing at all waiting - totally normal, not an error
-            if time.monotonic() > deadline:
-                raise RuntimeError(
-                    f"stalled reading 4-byte length header: got {len(buf)}/4 bytes "
-                    f"(endpoint max packet size={ep_in.wMaxPacketSize})"
-                )
-    (length,) = struct.unpack("<I", bytes(buf))
-    if length == 0:
-        return b""
-    if length > 50_000_000:
-        raise RuntimeError(
-            f"implausible frame length {length} parsed from header {buf.hex()} "
-            f"-- almost certainly a framing desync, not a real message"
-        )
-    payload = bytearray()
-    deadline = time.monotonic() + max_wait
-    while len(payload) < length:
-        try:
-            payload += bytes(ep_in.read(length - len(payload), int(timeout * 1000)))
-            deadline = time.monotonic() + max_wait
-        except usb.core.USBTimeoutError:
-            if time.monotonic() > deadline:
-                multiple = (len(payload) % ep_in.wMaxPacketSize == 0)
-                raise RuntimeError(
-                    f"stalled reading payload: got {len(payload)}/{length} bytes "
-                    f"(endpoint max packet size={ep_in.wMaxPacketSize}, "
-                    f"stalled-at-exact-packet-multiple={multiple})"
-                )
-    return bytes(payload)
+    try:
+        chunk = ep_in.read(max_read, int(timeout * 1000))
+        buf += bytes(chunk)
+    except usb.core.USBTimeoutError:
+        return None  # nothing new arrived - totally normal, not an error
+
+    idx = buf.find(b"\n")
+    if idx != -1:
+        line = bytes(buf[:idx])
+        del buf[:idx + 1]
+        return line
+    return None  # got some bytes but not a full line yet; wait for more
 
 
 def _usb_error_hint(e):
@@ -444,10 +425,8 @@ class TKApp:
                 time.sleep(0.05)
                 continue
             try:
-                raw = receive_frame(dev)
+                raw = receive_line(dev)
             except usb.core.USBTimeoutError as e:
-                # A stuck-mid-frame timeout is worth knowing about but isn't
-                # fatal -- keep the read loop alive and just retry.
                 now = time.monotonic()
                 if now - last_err_log > 3:
                     self.root.after(0, self._log, f"USB read timeout (retrying): {_usb_error_hint(e)}")
@@ -516,6 +495,7 @@ class TKApp:
             self._inst = None
         with self._sub_lock:
             self._subscribed = None
+        _RECV_BUF.clear()
         self.connected = False
         self.connect_btn.config(text="Connect and Run")
         self._set_status("Disconnected", "gray")
