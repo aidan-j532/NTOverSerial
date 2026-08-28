@@ -400,6 +400,17 @@ class TKApp:
             self._subscribed = set(keys) if keys else set()
             self._pending_initial_push = list(keys)
             self._push_first = True
+        try:
+            info = []
+            for k in keys:
+                t = self._inst.getTopic(k)
+                if t is None:
+                    info.append(f"{k}: unknown")
+                else:
+                    info.append(f"{k}: exists={t.exists()} type={t.getTypeString()}")
+            self.root.after(0, self._log, f"Subscribed topics: {'; '.join(info)}")
+        except Exception as e:
+            self.root.after(0, self._log, f"Topic introspection failed: {e}")
         shown = ", ".join(repr(k) for k in keys[:10]) + (" ..." if len(keys) > 10 else "")
         self.root.after(0, self._log, f"Subscribed to {len(keys)} topics: {shown}")
 
@@ -414,22 +425,29 @@ class TKApp:
         for key in keys:
             try:
                 topic = self._inst.getTopic(key)
-                if topic is None or not topic.exists():
-                    still_waiting.append(key)
-                    continue
-                sub = topic.genericSubscribe()
+                type_str = topic.getTypeString() if topic is not None else ""
                 value = None
-                deadline = time.monotonic() + 0.5
-                while time.monotonic() < deadline:
-                    v = sub.get()
+                try:
+                    v = self._inst.getTable("").getValue(key)
                     if v is not None and v.isValid():
                         value = v
-                        break
-                    time.sleep(0.02)
+                except Exception:
+                    pass
+                if value is None and topic is not None and topic.exists():
+                    try:
+                        sub = topic.genericSubscribe()
+                        deadline = time.monotonic() + 0.5
+                        while time.monotonic() < deadline:
+                            v = sub.get()
+                            if v is not None and v.isValid():
+                                value = v
+                                break
+                            time.sleep(0.02)
+                    except Exception:
+                        pass
                 if value is None:
                     still_waiting.append(key)
                     continue
-                type_str = topic.getTypeString()
                 msg = {
                     "key": key,
                     "type": type_str,
