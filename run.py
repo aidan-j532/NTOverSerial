@@ -391,6 +391,14 @@ class TKApp:
         inst.getTable("").putValue(key, value)
         return None
 
+    @staticmethod
+    def _normalize_key(k):
+        k = k.strip()
+        if not k:
+            return ""
+        k = "/".join(part for part in k.split("/") if part)
+        return "/" + k
+
     def _fuzzy_topic_match(self, key, limit=5):
         try:
             tokens = [t for t in key.replace("/", " ").split() if t]
@@ -412,7 +420,8 @@ class TKApp:
         if not isinstance(subscribed, list):
             self.root.after(0, self._log, "Bad subscribe list")
             return
-        keys = [str(s) for s in subscribed]
+        keys = [self._normalize_key(str(s)) for s in subscribed]
+        keys = [k for k in keys if k]
         with self._sub_lock:
             self._subscribed = set(keys) if keys else set()
             self._pending_initial_push = list(keys)
@@ -448,7 +457,7 @@ class TKApp:
                 type_str = topic.getTypeString() if topic is not None else ""
                 value = None
                 try:
-                    v = self._inst.getTable("").getValue(key)
+                    v = self._inst.getEntry(key).getValue()
                     if v is not None and v.isValid():
                         value = v
                 except Exception:
