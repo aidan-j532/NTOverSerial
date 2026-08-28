@@ -3,8 +3,7 @@ import json
 import time
 import threading
 import ntcore
-import serial
-import serial.tools.list_ports
+from AndroidAccessory import AndroidAccessory, find_devices, device_label
 from StructDataStuff import SchemaRegistry
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -66,26 +65,26 @@ def handle_event(event: ntcore.Event, table_prefix: str = "", registry: SchemaRe
 class TKApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("NT over Serial")
+        self.root.title("NT over USB (Android Accessory)")
         self.root.geometry("520x420")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.ip_var = tk.StringVar(value="10.22.7.2")
-        self.port_var = tk.StringVar()
-        self.baud_var = tk.StringVar(value="115200")
+        self.usb_var = tk.StringVar()
         self.connected = False
         self._stop = threading.Event()
         self._thread = None
-        self._thread_serial = None
-        self._ser = None
+        self._thread_io = None
+        self._axc = None
+        self._devices = []
         self._inst = None
         self._poller = None
         self._subscribed = None
         self._sub_lock = threading.Lock()
 
         self._build_ui()
-        self._refresh_ports()
+        self._refresh_devices()
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding="12")
@@ -102,16 +101,10 @@ class TKApp:
 
         row = ttk.Frame(conn)
         row.pack(fill=tk.X, pady=2)
-        ttk.Label(row, text="Serial Port:", width=12).pack(side=tk.LEFT)
-        self.port_combo = ttk.Combobox(row, textvariable=self.port_var, width=20, state="readonly")
-        self.port_combo.pack(side=tk.LEFT)
-        ttk.Button(row, text="Refresh", command=self._refresh_ports, width=8).pack(side=tk.LEFT, padx=(6, 0))
-
-        row = ttk.Frame(conn)
-        row.pack(fill=tk.X, pady=2)
-        ttk.Label(row, text="Baud Rate:", width=12).pack(side=tk.LEFT)
-        bauds = ["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"]
-        ttk.Combobox(row, textvariable=self.baud_var, values=bauds, width=20, state="readonly").pack(side=tk.LEFT)
+        ttk.Label(row, text="USB Device:", width=12).pack(side=tk.LEFT)
+        self.usb_combo = ttk.Combobox(row, textvariable=self.usb_var, width=28, state="readonly")
+        self.usb_combo.pack(side=tk.LEFT)
+        ttk.Button(row, text="Refresh", command=self._refresh_devices, width=8).pack(side=tk.LEFT, padx=(6, 0))
 
         ctrl = ttk.Frame(main)
         ctrl.pack(fill=tk.X, pady=(0, 8))
@@ -128,11 +121,16 @@ class TKApp:
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-    def _refresh_ports(self):
-        ports = [p.device for p in serial.tools.list_ports.comports()]
-        self.port_combo["values"] = ports
-        if ports and not self.port_var.get():
-            self.port_var.set(ports[0])
+    def _refresh_devices(self):
+        try:
+            devices = find_devices()
+        except Exception as e:
+            self._log(f"Device scan failed: {e}")
+            return
+        self._devices = devices
+        self.usb_combo["values"] = [device_label(d) for d in devices]
+        if devices and not self.usb_var.get():
+            self.usb_var.set(device_label(devices[0]))
 
     def _log(self, msg):
         self.log_text.configure(state=tk.NORMAL)
@@ -148,9 +146,9 @@ class TKApp:
             self._disconnect()
         else:
             self._connect()
-            
+
     @staticmethod
-    def _parse_serial_msg(line: str, inst: ntcore.NetworkTableInstance):
+    def _parse_usb_msg(line: str, inst: ntcore.NetworkTableInstance):
         data = json.loads(line)
         if "subscribe" in data:
             return ("subscribe", data.get("subscribe"))
@@ -176,70 +174,74 @@ class TKApp:
             with self._sub_lock:
                 self._subscribed = None
             msg = json.dumps({"topics": topics}) + "\n"
-            self._ser.write(msg.encode("utf-8"))
+            self._axc.send(msg.encode("utf-8"))
             self.root.after(0, self._log, f"Sent {len(topics)} topic names")
         except Exception as e:
             self.root.after(0, self._log, f"Topic listing error: {e}")
 
-    def _serial_to_nt(self):
+    def _usb_to_nt(self):
         while not self._stop.is_set():
+            axc = self._axc
+            if axc is None or not axc.connected:
+                time.sleep(0.05)
+                continue
             try:
-                line = self._ser.readline().decode("utf-8", "replace").strip()
-                if not line:
-                    continue
-                self.root.after(0, self._log, f"<< {line}")
-                try:
-                    result = self._parse_serial_msg(line, self._inst)
-                    if result is not None and result[0] == "subscribe":
-                        self._handle_subscribe(result[1])
-                except (json.JSONDecodeError, ValueError) as e:
-                    self.root.after(0, self._log, f"Bad serial message: {e}")
+                raw = axc.receive()
             except Exception as e:
-                self.root.after(0, self._log, f"Serial read error: {e}")
+                self.root.after(0, self._log, f"USB read error: {e}")
                 break
+            if not raw:
+                continue
+            line = raw.decode("utf-8", "replace").strip()
+            self.root.after(0, self._log, f"<< {line}")
+            try:
+                result = self._parse_usb_msg(line, self._inst)
+                if result is not None and result[0] == "subscribe":
+                    self._handle_subscribe(result[1])
+            except (json.JSONDecodeError, ValueError) as e:
+                self.root.after(0, self._log, f"Bad USB message: {e}")
 
     def _connect(self):
         ip = self.ip_var.get().strip()
-        port = self.port_var.get()
-        baud = self.baud_var.get()
+        label = self.usb_var.get()
         if not ip:
             messagebox.showwarning("Missing", "Enter a server IP address.")
             return
-        if not port:
-            messagebox.showwarning("Missing", "Select a serial port.")
+        if not label or not self._devices:
+            messagebox.showwarning("Missing", "Plug in the phone and select a USB device.")
             return
-        try:
-            self._ser = serial.Serial(port, int(baud), timeout=1)
-        except Exception as e:
-            messagebox.showerror("Serial Error", str(e))
+        dev = next((d for d in self._devices if device_label(d) == label), None)
+        if dev is None:
+            messagebox.showwarning("Missing", "Selected USB device is no longer present. Refresh.")
             return
 
+        self._axc = AndroidAccessory(vidpid=(dev.idVendor, dev.idProduct))
         self._stop.clear()
         self.connected = True
         self.connect_btn.config(text="Disconnect")
         self._set_status(f"Connecting to {ip}...", "orange")
-        self._log(f"Opened {port} @ {baud}")
+        self._log(f"Opening USB device {device_label(dev)}")
         self._log(f"Connecting to NT server {ip}...")
 
         self._thread = threading.Thread(target=self._run, args=(ip,), daemon=True)
         self._thread.start()
-        self._thread_serial = threading.Thread(target=self._serial_to_nt, daemon=True)
-        self._thread_serial.start()
+        self._thread_io = threading.Thread(target=self._usb_to_nt, daemon=True)
+        self._thread_io.start()
 
     def _disconnect(self):
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3)
             self._thread = None
-        if self._thread_serial:
-            self._thread_serial.join(timeout=3)
-            self._thread_serial = None
-        if self._ser:
+        if self._thread_io:
+            self._thread_io.join(timeout=3)
+            self._thread_io = None
+        if self._axc:
             try:
-                self._ser.close()
+                self._axc.close()
             except Exception:
                 pass
-            self._ser = None
+            self._axc = None
         if self._poller:
             try:
                 self._poller.close()
@@ -261,6 +263,14 @@ class TKApp:
 
     def _run(self, ip):
         try:
+            try:
+                self._axc.connect(max_wait=5.0)
+            except Exception as e:
+                self.root.after(0, self._log, f"USB connect failed: {e}")
+                self.root.after(0, self._set_status, "USB connect failed", "red")
+                return
+            self.root.after(0, self._log, "Android accessory connected")
+
             inst = ntcore.NetworkTableInstance.getDefault()
             self._inst = inst
             inst.setServer(ip)
@@ -292,10 +302,9 @@ class TKApp:
                     msg = handle_event(ev, subscribed=subscribed)
                     if msg:
                         try:
-                            self._ser.write(msg.encode("utf-8"))
-                            # self.root.after(0, self._log, f">> {msg.strip()}")
+                            self._axc.send(msg.encode("utf-8"))
                         except Exception as e:
-                            self.root.after(0, self._log, f"Serial write error :) Ur cooked blud: {e}")
+                            self.root.after(0, self._log, f"USB write error: {e}")
                 time.sleep(0.02)
 
         except Exception as e:
@@ -307,11 +316,11 @@ class TKApp:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2)
-        if self._thread_serial:
-            self._thread_serial.join(timeout=2)
-        if self._ser:
+        if self._thread_io:
+            self._thread_io.join(timeout=2)
+        if self._axc:
             try:
-                self._ser.close()
+                self._axc.close()
             except Exception:
                 pass
         if self._poller:

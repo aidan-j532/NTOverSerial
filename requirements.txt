@@ -1,0 +1,3 @@
+pyntcore
+pyusb
+libusb
