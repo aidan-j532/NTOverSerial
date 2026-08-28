@@ -242,22 +242,37 @@ def send_messages(dev, msgs):
         ep_out.write(buf, timeout=3000)
 
 
-def receive_frame(dev, timeout=0.2):
+def receive_frame(dev, timeout=0.2, max_wait=2.0):
+    # Reads a 4-byte little-endian length prefix followed by that many
+    # payload bytes. The phone side may write the header and payload as
+    # separate USB transactions, so a single 200ms slice timing out with a
+    # partially-read header/payload is NOT fatal -- keep retrying within a
+    # longer overall deadline. Only raise (a real fault) if we've made no
+    # progress for the whole max_wait window.
     ep_in = _bulk_endpoints(dev)[0]
     buf = bytearray()
-    try:
-        while len(buf) < 4:
+    deadline = time.monotonic() + max_wait
+    while len(buf) < 4:
+        try:
             buf += bytes(ep_in.read(4 - len(buf), int(timeout * 1000)))
-    except usb.core.USBTimeoutError:
-        if len(buf) == 0:
-            return None
-        raise
+            deadline = time.monotonic() + max_wait  # progress made, extend deadline
+        except usb.core.USBTimeoutError:
+            if len(buf) == 0:
+                return None  # nothing at all waiting - totally normal, not an error
+            if time.monotonic() > deadline:
+                raise  # stuck mid-header for too long - something's actually wrong
     (length,) = struct.unpack("<I", bytes(buf))
     if length == 0:
         return b""
     payload = bytearray()
+    deadline = time.monotonic() + max_wait
     while len(payload) < length:
-        payload += bytes(ep_in.read(length - len(payload), int(timeout * 1000)))
+        try:
+            payload += bytes(ep_in.read(length - len(payload), int(timeout * 1000)))
+            deadline = time.monotonic() + max_wait
+        except usb.core.USBTimeoutError:
+            if time.monotonic() > deadline:
+                raise
     return bytes(payload)
 
 
@@ -401,6 +416,7 @@ class TKApp:
                 self.root.after(0, self._log, f"Topic listing error: {e}")
 
     def _usb_to_nt(self):
+        last_err_log = 0.0
         while not self._stop.is_set():
             dev = self._dev
             if dev is None:
@@ -408,6 +424,14 @@ class TKApp:
                 continue
             try:
                 raw = receive_frame(dev)
+            except usb.core.USBTimeoutError as e:
+                # A stuck-mid-frame timeout is worth knowing about but isn't
+                # fatal -- keep the read loop alive and just retry.
+                now = time.monotonic()
+                if now - last_err_log > 3:
+                    self.root.after(0, self._log, f"USB read timeout (retrying): {_usb_error_hint(e)}")
+                    last_err_log = now
+                continue
             except Exception as e:
                 self.root.after(0, self._log, f"USB read error: {_usb_error_hint(e)}")
                 break
