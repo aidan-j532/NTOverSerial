@@ -293,6 +293,7 @@ class TKApp:
         self._sub_lock = threading.Lock()
         self._last_write_err = 0.0
         self._write_err_count = 0
+        self._resend_count = 0
 
         self._build_ui()
         self._refresh_devices()
@@ -528,6 +529,9 @@ class TKApp:
                     if now - last_topic_send >= TOPIC_RESEND_INTERVAL:
                         self._send_topic_listing(quiet=True)
                         last_topic_send = now
+                        self._resend_count += 1
+                        if self._resend_count % 10 == 0:
+                            self.root.after(0, self._log, f"No subscribe yet; resent topic listing ({self._resend_count} times)")
                 pending = []
                 for ev in events:
                     msg = handle_event(ev, subscribed=subscribed)
