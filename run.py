@@ -308,6 +308,7 @@ class TKApp:
         self._inst = None
         self._poller = None
         self._subscribed = None
+        self._pending_initial_push = None
         self._sub_lock = threading.Lock()
         self._last_write_err = 0.0
         self._write_err_count = 0
@@ -395,7 +396,49 @@ class TKApp:
         keys = [str(s) for s in subscribed]
         with self._sub_lock:
             self._subscribed = set(keys) if keys else set()
-        self.root.after(0, self._log, f"Subscribed to {len(keys)} topics")
+            self._pending_initial_push = list(keys)
+        shown = ", ".join(repr(k) for k in keys[:10]) + (" ..." if len(keys) > 10 else "")
+        self.root.after(0, self._log, f"Subscribed to {len(keys)} topics: {shown}")
+
+    def _build_current_value_messages(self, keys):
+        # poller.addListener(..., kValueRemote) only fires on FUTURE value
+        # changes -- it never replays a topic's current value at the moment
+        # you subscribe. Build messages for the current snapshot so data
+        # shows up immediately even for topics that aren't actively
+        # changing right now. Called from the same thread that writes to
+        # the USB OUT endpoint (the _run loop), never from the read thread.
+        pending = []
+        matched = []
+        for key in keys:
+            topic = self._inst.getTopic(key)
+            if topic is None or not topic.exists():
+                continue
+            value = topic.genericSubscribe().get()
+            if value is None or not value.isValid():
+                continue
+            type_str = topic.getTypeString()
+            msg = {
+                "key": key,
+                "type": type_str,
+                "time": value.time() / 1_000_000.0,
+            }
+            if _registry.has_type(type_str):
+                try:
+                    msg["schema"] = _registry.get_schema(type_str)
+                    msg["value"] = _registry.decode_type(type_str, value.value())
+                except Exception:
+                    msg["value"] = value_to_json(value)
+            else:
+                msg["value"] = value_to_json(value)
+            pending.append((json.dumps(msg) + "\n").encode("utf-8"))
+            matched.append(key)
+        if matched:
+            self.root.after(0, self._log, f"Sent current value for {len(matched)} topic(s): {matched}")
+        elif keys:
+            self.root.after(0, self._log,
+                             "No current value available yet for any subscribed topic "
+                             "(will send as soon as it updates)")
+        return pending
 
     def _send_topic_listing(self, quiet=False):
         try:
@@ -495,6 +538,7 @@ class TKApp:
             self._inst = None
         with self._sub_lock:
             self._subscribed = None
+            self._pending_initial_push = None
         _RECV_BUF.clear()
         self.connected = False
         self.connect_btn.config(text="Connect and Run")
@@ -542,12 +586,16 @@ class TKApp:
                 events = poller.readQueue()
                 with self._sub_lock:
                     subscribed = self._subscribed
+                    initial_push_keys = self._pending_initial_push
+                    self._pending_initial_push = None
                 if subscribed is None:
                     now = time.monotonic()
                     if now - last_topic_send >= TOPIC_RESEND_INTERVAL:
                         self._send_topic_listing(quiet=True)
                         last_topic_send = now
                 pending = []
+                if initial_push_keys:
+                    pending.extend(self._build_current_value_messages(initial_push_keys))
                 for ev in events:
                     msg = handle_event(ev, subscribed=subscribed)
                     if msg:
