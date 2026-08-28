@@ -1,0 +1,1 @@
+Get-PnpDevice | Where-Object InstanceId -match 'VID_18D1' | ForEach-Object { $p = ($_ | Get-PnpDeviceProperty -KeyName DEVPKEY_Device_ProblemCode -EA SilentlyContinue).Data; "$($_.InstanceId) | $($_.FriendlyName) | $($_.Status) | problem=$p" }
