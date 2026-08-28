@@ -209,16 +209,17 @@ def _bulk_endpoints(dev):
     ep_in = ep_out = None
     try:
         for intf in dev.get_active_configuration().interfaces():
+            i_ep = o_ep = None
             for ep in intf.endpoints():
-                ep_addr = ep.bEndpointAddress
                 if ep.bmAttributes != usb.util.ENDPOINT_TYPE_BULK:
                     continue
-                if usb.util.endpoint_direction(ep_addr) == usb.util.ENDPOINT_IN:
-                    if ep_in is None or ep_addr == 0x82:
-                        ep_in = ep
+                if usb.util.endpoint_direction(ep.bEndpointAddress) == usb.util.ENDPOINT_IN:
+                    i_ep = i_ep or ep
                 else:
-                    if ep_out is None or ep_addr == 0x04:
-                        ep_out = ep
+                    o_ep = o_ep or ep
+            if i_ep is not None and o_ep is not None:
+                ep_in, ep_out = i_ep, o_ep
+                break
     except Exception:
         pass
     if ep_in is None or ep_out is None:
@@ -463,6 +464,7 @@ class TKApp:
             self._thread_io.join(timeout=3)
             self._thread_io = None
         self._dev = None
+        _EP_CACHE.clear()
         if self._poller:
             try:
                 self._poller.close()
@@ -491,6 +493,11 @@ class TKApp:
                 self.root.after(0, self._set_status, "USB connect failed", "red")
                 return
             self.root.after(0, self._log, "Android accessory connected")
+            try:
+                ep_in, ep_out = _bulk_endpoints(self._dev)
+                self.root.after(0, self._log, f"USB endpoints: IN 0x{ep_in.bEndpointAddress:02x}, OUT 0x{ep_out.bEndpointAddress:02x}")
+            except Exception as e:
+                self.root.after(0, self._log, f"Endpoint discovery: {e}")
 
             inst = ntcore.NetworkTableInstance.getDefault()
             self._inst = inst
