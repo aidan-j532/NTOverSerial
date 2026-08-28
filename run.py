@@ -22,6 +22,7 @@ DESCRIPTION = "NT over USB"
 VERSION = "1.0"
 URI = ""
 SERIAL = ""
+TOPIC_RESEND_INTERVAL = 2.0
 
 _registry = SchemaRegistry()
 _EP_CACHE = {}
@@ -73,7 +74,7 @@ def value_to_json(v: ntcore.Value):
 
 def _is_subscribed(key, subscribed):
     if subscribed is None:
-        return True
+        return False
     return key in subscribed
 
 
@@ -368,16 +369,18 @@ class TKApp:
             self._subscribed = set(keys) if keys else set()
         self.root.after(0, self._log, f"Subscribed to {len(keys)} topics")
 
-    def _send_topic_listing(self):
+    def _send_topic_listing(self, quiet=False):
         try:
             topics = [t.getName() for t in self._inst.getTopics()]
             with self._sub_lock:
                 self._subscribed = None
             msg = json.dumps({"topics": topics}) + "\n"
             send_frame(self._dev, msg.encode("utf-8"))
-            self.root.after(0, self._log, f"Sent {len(topics)} topic names")
+            if not quiet:
+                self.root.after(0, self._log, f"Sent {len(topics)} topic names")
         except Exception as e:
-            self.root.after(0, self._log, f"Topic listing error: {e}")
+            if not quiet:
+                self.root.after(0, self._log, f"Topic listing error: {e}")
 
     def _usb_to_nt(self):
         while not self._stop.is_set():
@@ -487,6 +490,7 @@ class TKApp:
             self.root.after(0, self._set_status, f"Connected to {ip}", "green")
 
             self._send_topic_listing()
+            last_topic_send = time.monotonic()
 
             while not self._stop.is_set():
                 dev = self._dev
@@ -495,6 +499,11 @@ class TKApp:
                 events = poller.readQueue()
                 with self._sub_lock:
                     subscribed = self._subscribed
+                if subscribed is None:
+                    now = time.monotonic()
+                    if now - last_topic_send >= TOPIC_RESEND_INTERVAL:
+                        self._send_topic_listing(quiet=True)
+                        last_topic_send = now
                 pending = []
                 for ev in events:
                     msg = handle_event(ev, subscribed=subscribed)
