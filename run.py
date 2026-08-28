@@ -7,8 +7,9 @@ import time
 import threading
 
 import usb.core
+import usb.util
 import ntcore
-from aoa import find_device, find_accessory, toggle_accessory_mode, read, write
+from aoa import find_device, find_accessory, toggle_accessory_mode
 from StructDataStuff import SchemaRegistry
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -23,6 +24,7 @@ URI = ""
 SERIAL = ""
 
 _registry = SchemaRegistry()
+_EP_CACHE = {}
 
 
 def _find_libusb_dll():
@@ -189,15 +191,42 @@ def connect_accessory(vidpid, max_wait=5.0):
     return dev
 
 
+def _bulk_endpoints(dev):
+    key = (dev.bus, dev.address)
+    if key in _EP_CACHE:
+        return _EP_CACHE[key]
+    ep_in = ep_out = None
+    try:
+        for intf in dev.get_active_configuration().interfaces():
+            for ep in intf.endpoints():
+                ep_addr = ep.bEndpointAddress
+                if ep.bmAttributes != usb.util.ENDPOINT_TYPE_BULK:
+                    continue
+                if usb.util.endpoint_direction(ep_addr) == usb.util.ENDPOINT_IN:
+                    if ep_in is None or ep_addr == 0x82:
+                        ep_in = ep
+                else:
+                    if ep_out is None or ep_addr == 0x04:
+                        ep_out = ep
+    except Exception:
+        pass
+    if ep_in is None or ep_out is None:
+        raise RuntimeError("Accessory bulk endpoints not found")
+    _EP_CACHE[key] = (ep_in, ep_out)
+    return ep_in, ep_out
+
+
 def send_frame(dev, payload):
-    write(dev, struct.pack("<I", len(payload)) + bytes(payload))
+    ep_out = _bulk_endpoints(dev)[1]
+    ep_out.write(struct.pack("<I", len(payload)) + bytes(payload))
 
 
 def receive_frame(dev, timeout=0.2):
+    ep_in = _bulk_endpoints(dev)[0]
     buf = bytearray()
     try:
         while len(buf) < 4:
-            buf += bytes(read(dev, 4 - len(buf), int(timeout * 1000)))
+            buf += bytes(ep_in.read(4 - len(buf), int(timeout * 1000)))
     except usb.core.USBTimeoutError:
         if len(buf) == 0:
             return None
@@ -207,7 +236,7 @@ def receive_frame(dev, timeout=0.2):
         return b""
     payload = bytearray()
     while len(payload) < length:
-        payload += bytes(read(dev, length - len(payload), int(timeout * 1000)))
+        payload += bytes(ep_in.read(length - len(payload), int(timeout * 1000)))
     return bytes(payload)
 
 
