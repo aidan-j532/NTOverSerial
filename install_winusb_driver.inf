@@ -1,0 +1,29 @@
+; Binds Windows' signed in-box WinUSB driver to the NTOverSerial
+; Android accessory-mode device (Essential PH-1 flips to VID_18D1).
+[Version]
+Signature   = "$Windows NT$"
+Class       = USBDevice
+ClassGuid   = {88BA0321-050A-4a67-80B7-6852F0746561}
+Provider    = %ProviderName%
+DriverVer   = 01/01/2026,1.0.0.0
+
+[Manufacturer]
+%ProviderName% = DeviceList,NTamd64
+
+[DeviceList.NTamd64]
+%DeviceDesc% = WinUSB_Install, USB\VID_18D1&PID_2D00
+%DeviceDesc% = WinUSB_Install, USB\VID_18D1&PID_2D01
+
+[DestinationDirs]
+
+[WinUSB_Install.NT]
+Include = winusb.inf
+Needs   = WINUSB_Runtime.NT
+
+[WinUSB_Install.NT.Services]
+Include = winusb.inf
+Needs   = WINUSB_Runtime.NT.Services
+
+[Strings]
+ProviderName = "NTOverSerial"
+DeviceDesc   = "NTOverSerial Android Accessory (WinUSB)"
