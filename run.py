@@ -375,9 +375,16 @@ class TKApp:
             with self._sub_lock:
                 self._subscribed = None
             msg = json.dumps({"topics": topics}) + "\n"
-            send_frame(self._dev, msg.encode("utf-8"))
+            try:
+                send_frame(self._dev, msg.encode("utf-8"))
+            except usb.core.USBTimeoutError:
+                time.sleep(0.5)
+                send_frame(self._dev, msg.encode("utf-8"))
             if not quiet:
                 self.root.after(0, self._log, f"Sent {len(topics)} topic names")
+        except usb.core.USBTimeoutError:
+            if not quiet:
+                self.root.after(0, self._log, "Topic listing write timed out; retrying automatically")
         except Exception as e:
             if not quiet:
                 self.root.after(0, self._log, f"Topic listing error: {e}")
