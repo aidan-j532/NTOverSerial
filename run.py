@@ -249,6 +249,14 @@ def receive_frame(dev, timeout=0.2, max_wait=2.0):
     # partially-read header/payload is NOT fatal -- keep retrying within a
     # longer overall deadline. Only raise (a real fault) if we've made no
     # progress for the whole max_wait window.
+    #
+    # NOTE: if a stall consistently happens at a fixed byte count that is an
+    # exact multiple of ep_in.wMaxPacketSize, that's the classic USB
+    # zero-length-packet (ZLP) termination issue: the device wrote exactly N
+    # * wMaxPacketSize bytes and never followed up with a short/zero packet,
+    # so the host has no way to know the transfer ended. That needs a fix on
+    # the device side (send a trailing ZLP, or avoid exact-multiple sizes),
+    # not here.
     ep_in = _bulk_endpoints(dev)[0]
     buf = bytearray()
     deadline = time.monotonic() + max_wait
@@ -260,10 +268,18 @@ def receive_frame(dev, timeout=0.2, max_wait=2.0):
             if len(buf) == 0:
                 return None  # nothing at all waiting - totally normal, not an error
             if time.monotonic() > deadline:
-                raise  # stuck mid-header for too long - something's actually wrong
+                raise RuntimeError(
+                    f"stalled reading 4-byte length header: got {len(buf)}/4 bytes "
+                    f"(endpoint max packet size={ep_in.wMaxPacketSize})"
+                )
     (length,) = struct.unpack("<I", bytes(buf))
     if length == 0:
         return b""
+    if length > 50_000_000:
+        raise RuntimeError(
+            f"implausible frame length {length} parsed from header {buf.hex()} "
+            f"-- almost certainly a framing desync, not a real message"
+        )
     payload = bytearray()
     deadline = time.monotonic() + max_wait
     while len(payload) < length:
@@ -272,7 +288,12 @@ def receive_frame(dev, timeout=0.2, max_wait=2.0):
             deadline = time.monotonic() + max_wait
         except usb.core.USBTimeoutError:
             if time.monotonic() > deadline:
-                raise
+                multiple = (len(payload) % ep_in.wMaxPacketSize == 0)
+                raise RuntimeError(
+                    f"stalled reading payload: got {len(payload)}/{length} bytes "
+                    f"(endpoint max packet size={ep_in.wMaxPacketSize}, "
+                    f"stalled-at-exact-packet-multiple={multiple})"
+                )
     return bytes(payload)
 
 
