@@ -173,16 +173,6 @@ def find_candidates():
     return phone if phone else others
 
 
-def _device_attached(dev):
-    try:
-        for d in usb.core.find(find_all=True):
-            if d.bus == dev.bus and d.address == dev.address:
-                return True
-    except Exception:
-        pass
-    return False
-
-
 def connect_accessory(vidpid, max_wait=5.0):
     init_backend()
     dev = find_accessory()
@@ -208,18 +198,28 @@ def _bulk_endpoints(dev):
         return _EP_CACHE[key]
     ep_in = ep_out = None
     try:
+        # The phone re-enumerates in accessory mode as a COMPOSITE device:
+        # the real Android Accessory Interface (vendor-specific, class 0xFF)
+        # plus other interfaces (e.g. ADB) that also expose bulk endpoints.
+        # We must only look at endpoints on the accessory interface itself,
+        # or we can silently latch onto e.g. the ADB pipe instead -- writes
+        # and reads "succeed" but nothing is on the other end, so nothing
+        # ever arrives and nothing ever errors.
+        accessory_intf = None
         for intf in dev.get_active_configuration().interfaces():
-            i_ep = o_ep = None
-            for ep in intf.endpoints():
-                if ep.bmAttributes != usb.util.ENDPOINT_TYPE_BULK:
-                    continue
-                if usb.util.endpoint_direction(ep.bEndpointAddress) == usb.util.ENDPOINT_IN:
-                    i_ep = i_ep or ep
-                else:
-                    o_ep = o_ep or ep
-            if i_ep is not None and o_ep is not None:
-                ep_in, ep_out = i_ep, o_ep
+            if intf.bInterfaceClass == 0xFF:
+                accessory_intf = intf
                 break
+        if accessory_intf is None:
+            raise RuntimeError("No vendor-specific (accessory) interface found on device")
+        for ep in accessory_intf.endpoints():
+            if ep.bmAttributes != usb.util.ENDPOINT_TYPE_BULK:
+                continue
+            ep_addr = ep.bEndpointAddress
+            if usb.util.endpoint_direction(ep_addr) == usb.util.ENDPOINT_IN:
+                ep_in = ep
+            else:
+                ep_out = ep
     except Exception:
         pass
     if ep_in is None or ep_out is None:
@@ -401,22 +401,15 @@ class TKApp:
                 self.root.after(0, self._log, f"Topic listing error: {e}")
 
     def _usb_to_nt(self):
-        reads = 0
         while not self._stop.is_set():
             dev = self._dev
             if dev is None:
                 time.sleep(0.05)
                 continue
-            reads += 1
-            if reads % 20 == 1 and not _device_attached(dev):
-                self.root.after(0, self._log, "USB device removed; disconnecting")
-                self.root.after(0, self._disconnect)
-                break
             try:
                 raw = receive_frame(dev)
             except Exception as e:
                 self.root.after(0, self._log, f"USB read error: {_usb_error_hint(e)}")
-                self.root.after(0, self._disconnect)
                 break
             if not raw:
                 continue
@@ -464,7 +457,6 @@ class TKApp:
             self._thread_io.join(timeout=3)
             self._thread_io = None
         self._dev = None
-        _EP_CACHE.clear()
         if self._poller:
             try:
                 self._poller.close()
@@ -493,11 +485,6 @@ class TKApp:
                 self.root.after(0, self._set_status, "USB connect failed", "red")
                 return
             self.root.after(0, self._log, "Android accessory connected")
-            try:
-                ep_in, ep_out = _bulk_endpoints(self._dev)
-                self.root.after(0, self._log, f"USB endpoints: IN 0x{ep_in.bEndpointAddress:02x}, OUT 0x{ep_out.bEndpointAddress:02x}")
-            except Exception as e:
-                self.root.after(0, self._log, f"Endpoint discovery: {e}")
 
             inst = ntcore.NetworkTableInstance.getDefault()
             self._inst = inst
@@ -533,14 +520,13 @@ class TKApp:
                 if subscribed is None:
                     now = time.monotonic()
                     if now - last_topic_send >= TOPIC_RESEND_INTERVAL:
-                        self._send_topic_listing()
+                        self._send_topic_listing(quiet=True)
                         last_topic_send = now
                 pending = []
                 for ev in events:
                     msg = handle_event(ev, subscribed=subscribed)
                     if msg:
                         pending.append(msg.encode("utf-8"))
-                fatal = False
                 if pending:
                     try:
                         send_messages(dev, pending)
@@ -551,12 +537,6 @@ class TKApp:
                             self.root.after(0, self._log, f"USB write error (x{self._write_err_count}): {_usb_error_hint(e)}")
                             self._last_write_err = now
                             self._write_err_count = 0
-                        if not isinstance(e, usb.core.USBTimeoutError):
-                            fatal = True
-                if fatal:
-                    self.root.after(0, self._log, "USB link lost; disconnecting")
-                    self.root.after(0, self._disconnect)
-                    break
                 time.sleep(0.02)
 
         except Exception as e:
@@ -581,6 +561,7 @@ class TKApp:
                 self._inst.stopClient()
             except Exception:
                 pass
+            self._inst = None
         self.root.destroy()
 
 if __name__ == "__main__":
