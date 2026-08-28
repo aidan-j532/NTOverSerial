@@ -391,6 +391,23 @@ class TKApp:
         inst.getTable("").putValue(key, value)
         return None
 
+    def _fuzzy_topic_match(self, key, limit=5):
+        try:
+            tokens = [t for t in key.replace("/", " ").split() if t]
+        except Exception:
+            return []
+        if not tokens:
+            return []
+        names = [t.getName() for t in self._inst.getTopics()]
+        scored = []
+        for n in names:
+            nl = n.lower()
+            score = sum(1 for t in tokens if t.lower() in nl)
+            if score:
+                scored.append((score, n))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [n for _, n in scored[:limit]]
+
     def _handle_subscribe(self, subscribed):
         if not isinstance(subscribed, list):
             self.root.after(0, self._log, "Bad subscribe list")
@@ -404,10 +421,13 @@ class TKApp:
             info = []
             for k in keys:
                 t = self._inst.getTopic(k)
-                if t is None:
-                    info.append(f"{k}: unknown")
+                if t is None or not t.exists():
+                    info.append(f"{k}: exists=False")
+                    similar = self._fuzzy_topic_match(k)
+                    if similar:
+                        info.append(f"  suggests: {', '.join(repr(s) for s in similar)}")
                 else:
-                    info.append(f"{k}: exists={t.exists()} type={t.getTypeString()}")
+                    info.append(f"{k}: exists=True type={t.getTypeString()}")
             self.root.after(0, self._log, f"Subscribed topics: {'; '.join(info)}")
         except Exception as e:
             self.root.after(0, self._log, f"Topic introspection failed: {e}")
