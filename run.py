@@ -173,6 +173,16 @@ def find_candidates():
     return phone if phone else others
 
 
+def _device_attached(dev):
+    try:
+        for d in usb.core.find(find_all=True):
+            if d.bus == dev.bus and d.address == dev.address:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def connect_accessory(vidpid, max_wait=5.0):
     init_backend()
     dev = find_accessory()
@@ -390,15 +400,22 @@ class TKApp:
                 self.root.after(0, self._log, f"Topic listing error: {e}")
 
     def _usb_to_nt(self):
+        reads = 0
         while not self._stop.is_set():
             dev = self._dev
             if dev is None:
                 time.sleep(0.05)
                 continue
+            reads += 1
+            if reads % 20 == 1 and not _device_attached(dev):
+                self.root.after(0, self._log, "USB device removed; disconnecting")
+                self.root.after(0, self._disconnect)
+                break
             try:
                 raw = receive_frame(dev)
             except Exception as e:
                 self.root.after(0, self._log, f"USB read error: {_usb_error_hint(e)}")
+                self.root.after(0, self._disconnect)
                 break
             if not raw:
                 continue
@@ -516,6 +533,7 @@ class TKApp:
                     msg = handle_event(ev, subscribed=subscribed)
                     if msg:
                         pending.append(msg.encode("utf-8"))
+                fatal = False
                 if pending:
                     try:
                         send_messages(dev, pending)
@@ -526,6 +544,12 @@ class TKApp:
                             self.root.after(0, self._log, f"USB write error (x{self._write_err_count}): {_usb_error_hint(e)}")
                             self._last_write_err = now
                             self._write_err_count = 0
+                        if not isinstance(e, usb.core.USBTimeoutError):
+                            fatal = True
+                if fatal:
+                    self.root.after(0, self._log, "USB link lost; disconnecting")
+                    self.root.after(0, self._disconnect)
+                    break
                 time.sleep(0.02)
 
         except Exception as e:
