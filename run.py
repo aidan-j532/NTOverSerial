@@ -141,18 +141,33 @@ def _has_vendor_interface(dev):
     return False
 
 
+def _is_phone_like(dev, name):
+    if dev.idVendor == ACCESSORY_VID and dev.idProduct in ACCESSORY_PIDS:
+        return True
+    low = name.lower()
+    if any(w in low for w in ("android", "essential", "ph-1", "mata", "qualcomm", "google")):
+        return True
+    return _has_vendor_interface(dev)
+
+
 def find_candidates():
     init_backend()
-    out = []
+    phone = []
+    others = []
     try:
         for dev in usb.core.find(find_all=True):
-            if dev.idVendor == ACCESSORY_VID and dev.idProduct in ACCESSORY_PIDS:
-                out.append((dev.idVendor, dev.idProduct, _device_name(dev)))
-            elif _has_vendor_interface(dev) or "android" in _device_name(dev).lower():
-                out.append((dev.idVendor, dev.idProduct, _device_name(dev)))
-    except Exception:
-        pass
-    return out
+            try:
+                name = _device_name(dev)
+            except Exception:
+                name = ""
+            entry = (dev.idVendor, dev.idProduct, name or f"{dev.idVendor:04x}:{dev.idProduct:04x}")
+            if _is_phone_like(dev, name):
+                phone.append(entry)
+            else:
+                others.append(entry)
+    except Exception as e:
+        raise RuntimeError(f"USB enumeration failed: {e}")
+    return phone if phone else others
 
 
 def connect_accessory(vidpid, max_wait=5.0):
