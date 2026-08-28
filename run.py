@@ -413,8 +413,21 @@ class TKApp:
             topic = self._inst.getTopic(key)
             if topic is None or not topic.exists():
                 continue
-            value = topic.genericSubscribe().get()
-            if value is None or not value.isValid():
+            sub = topic.genericSubscribe()
+            # A freshly-created subscription doesn't have a value yet -- NT4
+            # needs a round trip to the server before data arrives. Give it
+            # a brief window instead of checking instantaneously (which
+            # would almost always find nothing, even for topics that are
+            # actively updating).
+            value = None
+            deadline = time.monotonic() + 0.5
+            while time.monotonic() < deadline:
+                v = sub.get()
+                if v is not None and v.isValid():
+                    value = v
+                    break
+                time.sleep(0.02)
+            if value is None:
                 continue
             type_str = topic.getTypeString()
             msg = {
