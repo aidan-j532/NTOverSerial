@@ -240,6 +240,16 @@ def receive_frame(dev, timeout=0.2):
     return bytes(payload)
 
 
+def _usb_error_hint(e):
+    s = str(e)
+    low = s.lower()
+    if any(t in low for t in ("not supported", "unimplemented", "access denied", "insufficient permission", "pipe error")):
+        return (s
+                + " - WinUSB driver not bound to accessory-mode 18D1:2D00. "
+                  "Run: powershell -ExecutionPolicy Bypass -File setup_accessory_driver.ps1")
+    return s
+
+
 # Create the TKinger app which is a nice like "old" looking UI library for python
 class TKApp:
     def __init__(self, root):
@@ -360,13 +370,14 @@ class TKApp:
 
     def _usb_to_nt(self):
         while not self._stop.is_set():
-            if self._dev is None:
+            dev = self._dev
+            if dev is None:
                 time.sleep(0.05)
                 continue
             try:
-                raw = receive_frame(self._dev)
+                raw = receive_frame(dev)
             except Exception as e:
-                self.root.after(0, self._log, f"USB read error: {e}")
+                self.root.after(0, self._log, f"USB read error: {_usb_error_hint(e)}")
                 break
             if not raw:
                 continue
@@ -467,6 +478,9 @@ class TKApp:
             self._send_topic_listing()
 
             while not self._stop.is_set():
+                dev = self._dev
+                if dev is None:
+                    break
                 events = poller.readQueue()
                 with self._sub_lock:
                     subscribed = self._subscribed
@@ -474,9 +488,9 @@ class TKApp:
                     msg = handle_event(ev, subscribed=subscribed)
                     if msg:
                         try:
-                            send_frame(self._dev, msg.encode("utf-8"))
+                            send_frame(dev, msg.encode("utf-8"))
                         except Exception as e:
-                            self.root.after(0, self._log, f"USB write error: {e}")
+                            self.root.after(0, self._log, f"USB write error: {_usb_error_hint(e)}")
                 time.sleep(0.02)
 
         except Exception as e:
