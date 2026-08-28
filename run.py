@@ -1,14 +1,57 @@
 import base64
+import os
 import json
+import struct
+import sys
 import time
 import threading
+
+import usb.core
 import ntcore
-from AndroidAccessory import AndroidAccessory, find_devices, device_label
+from aoa import find_device, find_accessory, toggle_accessory_mode, read, write
 from StructDataStuff import SchemaRegistry
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+ACCESSORY_VID = 0x18D1
+ACCESSORY_PIDS = (0x2D00, 0x2D01)
+MANUFACTURER = "NTOverSerial"
+MODEL = "Adapter"
+DESCRIPTION = "NT over USB"
+VERSION = "1.0"
+URI = ""
+SERIAL = ""
+
 _registry = SchemaRegistry()
+
+
+def _find_libusb_dll():
+    candidates = [
+        os.environ.get("LIBUSB_DLL_PATH"),
+        os.path.join(sys.prefix, "Lib", "site-packages", "libusb", "_platform", "windows", "x86_64", "libusb-1.0.dll"),
+        os.path.join(sys.prefix, "Lib", "site-packages", "libusb", "_platform", "windows", "arm64", "libusb-1.0.dll"),
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def init_backend():
+    dll = _find_libusb_dll()
+    if dll:
+        dll_dir = os.path.dirname(dll)
+        os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(dll_dir)
+            except Exception:
+                pass
+    try:
+        usb.core.find(find_all=True)
+    except usb.core.NoBackendError:
+        raise RuntimeError("libusb DLL not found (run: pip install libusb)")
+
 
 def value_to_json(v: ntcore.Value):
     t = v.type()
@@ -16,10 +59,12 @@ def value_to_json(v: ntcore.Value):
         return base64.b64encode(v.value()).decode("ascii")
     return v.value()
 
+
 def _is_subscribed(key, subscribed):
     if subscribed is None:
         return True
     return key in subscribed
+
 
 def build_message(event: ntcore.Event, table_prefix: str = "", registry: SchemaRegistry = None, subscribed=None):
     if registry is None:
@@ -61,6 +106,87 @@ def handle_event(event: ntcore.Event, table_prefix: str = "", registry: SchemaRe
         return None
     return build_message(event, table_prefix, registry, subscribed)
 
+
+def _device_name(dev):
+    man = prod = ""
+    try:
+        man = dev.manufacturer or ""
+    except Exception:
+        pass
+    try:
+        prod = dev.product or ""
+    except Exception:
+        pass
+    name = (man + " " + prod).strip()
+    return f"{dev.idVendor:04x}:{dev.idProduct:04x} {name}".strip()
+
+
+def _has_vendor_interface(dev):
+    try:
+        for cfg in dev.configs():
+            for intf in cfg.interfaces():
+                if intf.bInterfaceClass == 0xFF:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def find_candidates():
+    init_backend()
+    out = []
+    try:
+        for dev in usb.core.find(find_all=True):
+            if dev.idVendor == ACCESSORY_VID and dev.idProduct in ACCESSORY_PIDS:
+                out.append((dev.idVendor, dev.idProduct, _device_name(dev)))
+            elif _has_vendor_interface(dev) or "android" in _device_name(dev).lower():
+                out.append((dev.idVendor, dev.idProduct, _device_name(dev)))
+    except Exception:
+        pass
+    return out
+
+
+def connect_accessory(vidpid, max_wait=5.0):
+    init_backend()
+    dev = find_accessory()
+    if dev is None:
+        dev = find_device([vidpid]) if vidpid else None
+        if dev is not None:
+            toggle_accessory_mode(dev, MANUFACTURER, MODEL, DESCRIPTION, VERSION, URI, SERIAL)
+            deadline = time.monotonic() + max_wait
+            dev = None
+            while time.monotonic() < deadline:
+                dev = find_accessory()
+                if dev is not None:
+                    break
+                time.sleep(0.1)
+    if dev is None:
+        raise RuntimeError("Could not enter Android accessory mode. Is the phone plugged in, unlocked, and USB debugging on?")
+    return dev
+
+
+def send_frame(dev, payload):
+    write(dev, struct.pack("<I", len(payload)) + bytes(payload))
+
+
+def receive_frame(dev, timeout=0.2):
+    buf = bytearray()
+    try:
+        while len(buf) < 4:
+            buf += bytes(read(dev, 4 - len(buf), int(timeout * 1000)))
+    except usb.core.USBTimeoutError:
+        if len(buf) == 0:
+            return None
+        raise
+    (length,) = struct.unpack("<I", bytes(buf))
+    if length == 0:
+        return b""
+    payload = bytearray()
+    while len(payload) < length:
+        payload += bytes(read(dev, length - len(payload), int(timeout * 1000)))
+    return bytes(payload)
+
+
 # Create the TKinger app which is a nice like "old" looking UI library for python
 class TKApp:
     def __init__(self, root):
@@ -76,8 +202,8 @@ class TKApp:
         self._stop = threading.Event()
         self._thread = None
         self._thread_io = None
-        self._axc = None
-        self._devices = []
+        self._dev = None
+        self._candidates = []
         self._inst = None
         self._poller = None
         self._subscribed = None
@@ -123,14 +249,14 @@ class TKApp:
 
     def _refresh_devices(self):
         try:
-            devices = find_devices()
+            candidates = find_candidates()
         except Exception as e:
             self._log(f"Device scan failed: {e}")
             return
-        self._devices = devices
-        self.usb_combo["values"] = [device_label(d) for d in devices]
-        if devices and not self.usb_var.get():
-            self.usb_var.set(device_label(devices[0]))
+        self._candidates = candidates
+        self.usb_combo["values"] = [c[2] for c in candidates]
+        if candidates and not self.usb_var.get():
+            self.usb_var.set(candidates[0][2])
 
     def _log(self, msg):
         self.log_text.configure(state=tk.NORMAL)
@@ -174,19 +300,18 @@ class TKApp:
             with self._sub_lock:
                 self._subscribed = None
             msg = json.dumps({"topics": topics}) + "\n"
-            self._axc.send(msg.encode("utf-8"))
+            send_frame(self._dev, msg.encode("utf-8"))
             self.root.after(0, self._log, f"Sent {len(topics)} topic names")
         except Exception as e:
             self.root.after(0, self._log, f"Topic listing error: {e}")
 
     def _usb_to_nt(self):
         while not self._stop.is_set():
-            axc = self._axc
-            if axc is None or not axc.connected:
+            if self._dev is None:
                 time.sleep(0.05)
                 continue
             try:
-                raw = axc.receive()
+                raw = receive_frame(self._dev)
             except Exception as e:
                 self.root.after(0, self._log, f"USB read error: {e}")
                 break
@@ -207,23 +332,22 @@ class TKApp:
         if not ip:
             messagebox.showwarning("Missing", "Enter a server IP address.")
             return
-        if not label or not self._devices:
+        if not label or not self._candidates:
             messagebox.showwarning("Missing", "Plug in the phone and select a USB device.")
             return
-        dev = next((d for d in self._devices if device_label(d) == label), None)
-        if dev is None:
+        match = next((c for c in self._candidates if c[2] == label), None)
+        if match is None:
             messagebox.showwarning("Missing", "Selected USB device is no longer present. Refresh.")
             return
 
-        self._axc = AndroidAccessory(vidpid=(dev.idVendor, dev.idProduct))
         self._stop.clear()
         self.connected = True
         self.connect_btn.config(text="Disconnect")
         self._set_status(f"Connecting to {ip}...", "orange")
-        self._log(f"Opening USB device {device_label(dev)}")
+        self._log(f"Opening USB device {label}")
         self._log(f"Connecting to NT server {ip}...")
 
-        self._thread = threading.Thread(target=self._run, args=(ip,), daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(ip, (match[0], match[1])), daemon=True)
         self._thread.start()
         self._thread_io = threading.Thread(target=self._usb_to_nt, daemon=True)
         self._thread_io.start()
@@ -236,12 +360,7 @@ class TKApp:
         if self._thread_io:
             self._thread_io.join(timeout=3)
             self._thread_io = None
-        if self._axc:
-            try:
-                self._axc.close()
-            except Exception:
-                pass
-            self._axc = None
+        self._dev = None
         if self._poller:
             try:
                 self._poller.close()
@@ -261,10 +380,10 @@ class TKApp:
         self._set_status("Disconnected", "gray")
         self._log("Disconnected.")
 
-    def _run(self, ip):
+    def _run(self, ip, vidpid):
         try:
             try:
-                self._axc.connect(max_wait=5.0)
+                self._dev = connect_accessory(vidpid)
             except Exception as e:
                 self.root.after(0, self._log, f"USB connect failed: {e}")
                 self.root.after(0, self._set_status, "USB connect failed", "red")
@@ -302,7 +421,7 @@ class TKApp:
                     msg = handle_event(ev, subscribed=subscribed)
                     if msg:
                         try:
-                            self._axc.send(msg.encode("utf-8"))
+                            send_frame(self._dev, msg.encode("utf-8"))
                         except Exception as e:
                             self.root.after(0, self._log, f"USB write error: {e}")
                 time.sleep(0.02)
@@ -318,11 +437,7 @@ class TKApp:
             self._thread.join(timeout=2)
         if self._thread_io:
             self._thread_io.join(timeout=2)
-        if self._axc:
-            try:
-                self._axc.close()
-            except Exception:
-                pass
+        self._dev = None
         if self._poller:
             try:
                 self._poller.close()
