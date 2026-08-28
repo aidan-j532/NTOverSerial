@@ -26,14 +26,23 @@ _registry = SchemaRegistry()
 
 
 def _find_libusb_dll():
-    candidates = [
-        os.environ.get("LIBUSB_DLL_PATH"),
-        os.path.join(sys.prefix, "Lib", "site-packages", "libusb", "_platform", "windows", "x86_64", "libusb-1.0.dll"),
-        os.path.join(sys.prefix, "Lib", "site-packages", "libusb", "_platform", "windows", "arm64", "libusb-1.0.dll"),
-    ]
-    for path in candidates:
-        if path and os.path.isfile(path):
+    try:
+        from libusb._platform.windows import DLL_PATH
+        path = str(DLL_PATH)
+        if os.path.isfile(path):
             return path
+    except Exception:
+        pass
+    try:
+        import site
+        roots = [sys.prefix]
+        roots += [s for s in site.getsitepackages() if os.path.isdir(s)]
+        for root in roots:
+            for dirpath, _dirs, files in os.walk(root):
+                if "libusb-1.0.dll" in files:
+                    return os.path.join(dirpath, "libusb-1.0.dll")
+    except Exception:
+        pass
     return None
 
 
