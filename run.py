@@ -1,7 +1,6 @@
 import base64
 import os
 import json
-import struct
 import sys
 import time
 import threading
@@ -17,7 +16,7 @@ ACCESSORY_VID = 0x18D1
 ACCESSORY_PIDS = (0x2D00, 0x2D01)
 MANUFACTURER = "NTOverSerial"
 MODEL = "Adapter"
-DESCRIPTION = "NT over USB"
+DESCRIPTION = "Sends NetworkTables data from an frc robot over an AOA usb connection"
 VERSION = "1.0"
 URI = ""
 SERIAL = ""
@@ -291,7 +290,7 @@ def _usb_error_hint(e):
 class TKApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("NT over USB (Android Accessory)")
+        self.root.title("NTOverAOA")
         self.root.geometry("520x420")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
