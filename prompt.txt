@@ -1,1 +1,0 @@
-Nope, it again said it will update as soon as possiblke. I get a << subscribe message, then it says susrcrided to 1 topics, no current value avaiblle, then nothing else.

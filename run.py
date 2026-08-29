@@ -72,12 +72,6 @@ def value_to_json(v: ntcore.Value):
     return v.value()
 
 
-def _is_subscribed(key, subscribed):
-    if subscribed is None:
-        return False
-    return key in subscribed
-
-
 def build_message(event: ntcore.Event, table_prefix: str = "", registry: SchemaRegistry = None, subscribed=None):
     if registry is None:
         registry = _registry
@@ -85,7 +79,7 @@ def build_message(event: ntcore.Event, table_prefix: str = "", registry: SchemaR
     key = data.topic.getName()
     if table_prefix and not key.startswith(table_prefix):
         return None
-    if not _is_subscribed(key, subscribed):
+    if subscribed is not None and key not in subscribed:
         return None
     type_str = data.topic.getTypeString()
     msg = {
@@ -198,13 +192,9 @@ def _bulk_endpoints(dev):
         return _EP_CACHE[key]
     ep_in = ep_out = None
     try:
-        # The phone re-enumerates in accessory mode as a COMPOSITE device:
-        # the real Android Accessory Interface (vendor-specific, class 0xFF)
-        # plus other interfaces (e.g. ADB) that also expose bulk endpoints.
-        # We must only look at endpoints on the accessory interface itself,
-        # or we can silently latch onto e.g. the ADB pipe instead -- writes
-        # and reads "succeed" but nothing is on the other end, so nothing
-        # ever arrives and nothing ever errors.
+        # in accessory mode the phone shows up as a composite device, so
+        # we have to grab the actual accessory interface or we might end up
+        # on e.g. the ADB pipe where writes "succeed" but go nowhere
         accessory_intf = None
         for intf in dev.get_active_configuration().interfaces():
             if intf.bInterfaceClass == 0xFF:
@@ -229,9 +219,7 @@ def _bulk_endpoints(dev):
 
 
 def send_frame(dev, payload):
-    # No length-prefix framing on the wire -- the device speaks plain
-    # newline-delimited JSON. `payload` already ends in "\n" (see
-    # build_message / _send_topic_listing), so just write it as-is.
+    # plain newline-delimited json, already ends in "\n"
     ep_out = _bulk_endpoints(dev)[1]
     ep_out.write(bytes(payload), timeout=3000)
 
@@ -249,11 +237,9 @@ _RECV_BUF = {}
 
 
 def receive_line(dev, timeout=0.2, max_read=65536):
-    # The device speaks plain newline-delimited JSON with no length prefix.
-    # A single USB read may contain a partial line, exactly one line, or
-    # multiple lines concatenated -- so we keep a small per-device buffer
-    # across calls and hand back one complete line (without the newline)
-    # at a time.
+    # no length prefix on the wire, so a single read can have a partial
+    # line, one line, or several all mashed together. keep a per-device
+    # buffer and hand back one complete line at a time.
     key = (dev.bus, dev.address)
     buf = _RECV_BUF.setdefault(key, bytearray())
 
@@ -268,14 +254,14 @@ def receive_line(dev, timeout=0.2, max_read=65536):
         chunk = ep_in.read(max_read, int(timeout * 1000))
         buf += bytes(chunk)
     except usb.core.USBTimeoutError:
-        return None  # nothing new arrived - totally normal, not an error
+        return None  # nothing new - normal
 
     idx = buf.find(b"\n")
     if idx != -1:
         line = bytes(buf[:idx])
         del buf[:idx + 1]
         return line
-    return None  # got some bytes but not a full line yet; wait for more
+    return None  # got bytes but no full line yet
 
 
 def _usb_error_hint(e):
@@ -288,7 +274,7 @@ def _usb_error_hint(e):
     return s
 
 
-# Create the TKinger app which is a nice like "old" looking UI library for python
+# tkinter is fine for this lol
 class TKApp:
     def __init__(self, root):
         self.root = root
@@ -444,11 +430,9 @@ class TKApp:
         self.root.after(0, self._log, f"Subscribed to {len(keys)} topics: {shown}")
 
     def _build_current_value_messages(self, keys):
-        # Builds messages for the current snapshot of each key so data shows
-        # up immediately even for topics that aren't actively changing.
-        # A freshly-created NT4 subscription needs a round trip to the server
-        # before it has a value, so it is polled briefly. Returns
-        # (msgs, still_waiting_keys); the caller keeps retrying the latter.
+        # grab the current value of each key so data shows up even for topics
+        # that aren't actively changing. a fresh NT4 sub needs a round trip
+        # first so poll it briefly. returns (msgs, still_waiting_keys).
         pending = []
         still_waiting = []
         for key in keys:
