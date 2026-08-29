@@ -12,7 +12,6 @@ import ntcore
 from aoa import find_device, find_accessory, toggle_accessory_mode
 from StructDataStuff import SchemaRegistry
 import tkinter as tk
-from tkinter import ttk, messagebox
 
 ACCESSORY_VID = 0x18D1
 ACCESSORY_PIDS = (0x2D00, 0x2D01)
@@ -319,36 +318,36 @@ class TKApp:
         self._refresh_devices()
 
     def _build_ui(self):
-        main = ttk.Frame(self.root, padding="12")
+        main = tk.ttk.Frame(self.root, padding="12")
         main.pack(fill=tk.BOTH, expand=True)
 
-        conn = ttk.LabelFrame(main, text="Connection", padding="8")
+        conn = tk.ttk.LabelFrame(main, text="Connection", padding="8")
         conn.pack(fill=tk.X, pady=(0, 8))
 
-        row = ttk.Frame(conn)
+        row = tk.ttk.Frame(conn)
         row.pack(fill=tk.X, pady=2)
-        ttk.Label(row, text="Server IP:", width=12).pack(side=tk.LEFT)
-        self.ip_entry = ttk.Entry(row, textvariable=self.ip_var, width=25)
+        tk.ttk.Label(row, text="Server IP:", width=12).pack(side=tk.LEFT)
+        self.ip_entry = tk.ttk.Entry(row, textvariable=self.ip_var, width=25)
         self.ip_entry.pack(side=tk.LEFT)
 
-        row = ttk.Frame(conn)
+        row = tk.ttk.Frame(conn)
         row.pack(fill=tk.X, pady=2)
-        ttk.Label(row, text="USB Device:", width=12).pack(side=tk.LEFT)
-        self.usb_combo = ttk.Combobox(row, textvariable=self.usb_var, width=28, state="readonly")
+        tk.ttk.Label(row, text="USB Device:", width=12).pack(side=tk.LEFT)
+        self.usb_combo = tk.ttk.Combobox(row, textvariable=self.usb_var, width=28, state="readonly")
         self.usb_combo.pack(side=tk.LEFT)
-        ttk.Button(row, text="Refresh", command=self._refresh_devices, width=8).pack(side=tk.LEFT, padx=(6, 0))
+        tk.ttk.Button(row, text="Refresh", command=self._refresh_devices, width=8).pack(side=tk.LEFT, padx=(6, 0))
 
-        ctrl = ttk.Frame(main)
+        ctrl = tk.ttk.Frame(main)
         ctrl.pack(fill=tk.X, pady=(0, 8))
-        self.connect_btn = ttk.Button(ctrl, text="Connect and Run", command=self._toggle)
+        self.connect_btn = tk.ttk.Button(ctrl, text="Connect and Run", command=self._toggle)
         self.connect_btn.pack(side=tk.LEFT)
-        self.status_label = ttk.Label(ctrl, text="  Disconnected", foreground="gray")
+        self.status_label = tk.ttk.Label(ctrl, text="  Disconnected", foreground="gray")
         self.status_label.pack(side=tk.LEFT)
 
-        log_frame = ttk.LabelFrame(main, text="Log", padding="4")
+        log_frame = tk.ttk.LabelFrame(main, text="Log", padding="4")
         log_frame.pack(fill=tk.BOTH, expand=True)
         self.log_text = tk.Text(log_frame, height=10, state=tk.DISABLED, wrap=tk.WORD, font=("Consolas", 9))
-        sb = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        sb = tk.tk.ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=sb.set)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(fill=tk.BOTH, expand=True)
@@ -548,14 +547,14 @@ class TKApp:
         ip = self.ip_var.get().strip()
         label = self.usb_var.get()
         if not ip:
-            messagebox.showwarning("Missing", "Enter a server IP address.")
+            tk.messagebox.showwarning("Missing", "Enter a server IP address.")
             return
         if not label or not self._candidates:
-            messagebox.showwarning("Missing", "Plug in the phone and select a USB device.")
+            tk.messagebox.showwarning("Missing", "Plug in the phone and select a USB device.")
             return
         match = next((c for c in self._candidates if c[2] == label), None)
         if match is None:
-            messagebox.showwarning("Missing", "Selected USB device is no longer present. Refresh.")
+            tk.messagebox.showwarning("Missing", "Selected USB device is no longer present. Refresh.")
             return
 
         self._stop.clear()
