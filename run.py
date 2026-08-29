@@ -11,6 +11,7 @@ import ntcore
 from aoa import find_device, find_accessory, toggle_accessory_mode
 from StructDataStuff import SchemaRegistry
 import tkinter as tk
+from tkinter import ttk
 
 ACCESSORY_VID = 0x18D1
 ACCESSORY_PIDS = (0x2D00, 0x2D01)
@@ -303,36 +304,36 @@ class TKApp:
         self._refresh_devices()
 
     def _build_ui(self):
-        main = tk.ttk.Frame(self.root, padding="12")
+        main = ttk.Frame(self.root, padding="12")
         main.pack(fill=tk.BOTH, expand=True)
 
-        conn = tk.ttk.LabelFrame(main, text="Connection", padding="8")
+        conn = ttk.LabelFrame(main, text="Connection", padding="8")
         conn.pack(fill=tk.X, pady=(0, 8))
 
-        row = tk.ttk.Frame(conn)
+        row = ttk.Frame(conn)
         row.pack(fill=tk.X, pady=2)
-        tk.ttk.Label(row, text="Server IP:", width=12).pack(side=tk.LEFT)
-        self.ip_entry = tk.ttk.Entry(row, textvariable=self.ip_var, width=25)
+        ttk.Label(row, text="Server IP:", width=12).pack(side=tk.LEFT)
+        self.ip_entry = ttk.Entry(row, textvariable=self.ip_var, width=25)
         self.ip_entry.pack(side=tk.LEFT)
 
-        row = tk.ttk.Frame(conn)
+        row = ttk.Frame(conn)
         row.pack(fill=tk.X, pady=2)
-        tk.ttk.Label(row, text="USB Device:", width=12).pack(side=tk.LEFT)
-        self.usb_combo = tk.ttk.Combobox(row, textvariable=self.usb_var, width=28, state="readonly")
+        ttk.Label(row, text="USB Device:", width=12).pack(side=tk.LEFT)
+        self.usb_combo = ttk.Combobox(row, textvariable=self.usb_var, width=28, state="readonly")
         self.usb_combo.pack(side=tk.LEFT)
-        tk.ttk.Button(row, text="Refresh", command=self._refresh_devices, width=8).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(row, text="Refresh", command=self._refresh_devices, width=8).pack(side=tk.LEFT, padx=(6, 0))
 
-        ctrl = tk.ttk.Frame(main)
+        ctrl = ttk.Frame(main)
         ctrl.pack(fill=tk.X, pady=(0, 8))
-        self.connect_btn = tk.ttk.Button(ctrl, text="Connect and Run", command=self._toggle)
+        self.connect_btn = ttk.Button(ctrl, text="Connect and Run", command=self._toggle)
         self.connect_btn.pack(side=tk.LEFT)
-        self.status_label = tk.ttk.Label(ctrl, text="  Disconnected", foreground="gray")
+        self.status_label = ttk.Label(ctrl, text="  Disconnected", foreground="gray")
         self.status_label.pack(side=tk.LEFT)
 
-        log_frame = tk.ttk.LabelFrame(main, text="Log", padding="4")
+        log_frame = ttk.LabelFrame(main, text="Log", padding="4")
         log_frame.pack(fill=tk.BOTH, expand=True)
         self.log_text = tk.Text(log_frame, height=10, state=tk.DISABLED, wrap=tk.WORD, font=("Consolas", 9))
-        sb = tk.tk.ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        sb = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=sb.set)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(fill=tk.BOTH, expand=True)
