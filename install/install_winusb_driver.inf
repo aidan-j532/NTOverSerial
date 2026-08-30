@@ -1,4 +1,4 @@
-; Binds Windows' signed in-box WinUSB driver to the NTOverSerial
+; Binds Windows' signed in-box WinUSB driver to the NTOverAOA
 ; Android accessory-mode device (Essential PH-1 flips to VID_18D1).
 [Version]
 Signature   = "$Windows NT$"
@@ -25,5 +25,5 @@ Include = winusb.inf
 Needs   = WINUSB_Runtime.NT.Services
 
 [Strings]
-ProviderName = "NTOverSerial"
-DeviceDesc   = "NTOverSerial Android Accessory (WinUSB)"
+ProviderName = "NTOverAOA"
+DeviceDesc   = "NTOverAOA Android Accessory (WinUSB)"

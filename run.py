@@ -1,279 +1,16 @@
-import base64
-import os
 import json
-import sys
-import time
 import threading
+import time
+import tkinter as tk
+from tkinter import messagebox, ttk
 
 import usb.core
-import usb.util
-import ntcore
-from aoa import find_device, find_accessory, toggle_accessory_mode
-from StructDataStuff import SchemaRegistry
-import tkinter as tk
-from tkinter import ttk
 
-ACCESSORY_VID = 0x18D1
-ACCESSORY_PIDS = (0x2D00, 0x2D01)
-MANUFACTURER = "NTOverSerial"
-MODEL = "Adapter"
-DESCRIPTION = "Sends NetworkTables data from an frc robot over an AOA usb connection"
-VERSION = "1.0"
-URI = ""
-SERIAL = ""
+from classes.nt_handler import NTHandler
+from classes.usb_handler import USBHandler
+
 TOPIC_RESEND_INTERVAL = 10.0
 
-_registry = SchemaRegistry()
-_EP_CACHE = {}
-
-
-def _find_libusb_dll():
-    try:
-        from libusb._platform.windows import DLL_PATH
-        path = str(DLL_PATH)
-        if os.path.isfile(path):
-            return path
-    except Exception:
-        pass
-    try:
-        import site
-        roots = [sys.prefix]
-        roots += [s for s in site.getsitepackages() if os.path.isdir(s)]
-        for root in roots:
-            for dirpath, _dirs, files in os.walk(root):
-                if "libusb-1.0.dll" in files:
-                    return os.path.join(dirpath, "libusb-1.0.dll")
-    except Exception:
-        pass
-    return None
-
-
-def init_backend():
-    dll = _find_libusb_dll()
-    if dll:
-        dll_dir = os.path.dirname(dll)
-        os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
-        if hasattr(os, "add_dll_directory"):
-            try:
-                os.add_dll_directory(dll_dir)
-            except Exception:
-                pass
-    try:
-        usb.core.find(find_all=True)
-    except usb.core.NoBackendError:
-        raise RuntimeError("libusb DLL not found (run: pip install libusb)")
-
-
-def value_to_json(v: ntcore.Value):
-    t = v.type()
-    if t == ntcore.NetworkTableType.kRaw:
-        return base64.b64encode(v.value()).decode("ascii")
-    return v.value()
-
-
-def build_message(event: ntcore.Event, table_prefix: str = "", registry: SchemaRegistry = None, subscribed=None):
-    if registry is None:
-        registry = _registry
-    data = event.data
-    key = data.topic.getName()
-    if table_prefix and not key.startswith(table_prefix):
-        return None
-    if subscribed is not None and key not in subscribed:
-        return None
-    type_str = data.topic.getTypeString()
-    msg = {
-        "key": key,
-        "type": type_str,
-        "time": data.value.time() / 1_000_000.0,
-    }
-    if registry.has_type(type_str):
-        try:
-            msg["schema"] = registry.get_schema(type_str)
-            msg["value"] = registry.decode_type(type_str, data.value.value())
-        except Exception:
-            msg["value"] = value_to_json(data.value)
-    else:
-        msg["value"] = value_to_json(data.value)
-    return json.dumps(msg) + "\n"
-
-
-def handle_event(event: ntcore.Event, table_prefix: str = "", registry: SchemaRegistry = None, subscribed=None):
-    if registry is None:
-        registry = _registry
-    key = event.data.topic.getName()
-    marker = "/.schema/"
-    if marker in key:
-        name = key.split(marker, 1)[1]
-        try:
-            registry.register(name, event.data.value.value().decode("utf-8", "replace"))
-        except Exception:
-            pass
-        return None
-    return build_message(event, table_prefix, registry, subscribed)
-
-
-def _device_name(dev):
-    man = prod = ""
-    try:
-        man = dev.manufacturer or ""
-    except Exception:
-        pass
-    try:
-        prod = dev.product or ""
-    except Exception:
-        pass
-    name = (man + " " + prod).strip()
-    return f"{dev.idVendor:04x}:{dev.idProduct:04x} {name}".strip()
-
-
-def _has_vendor_interface(dev):
-    try:
-        for cfg in dev.configs():
-            for intf in cfg.interfaces():
-                if intf.bInterfaceClass == 0xFF:
-                    return True
-    except Exception:
-        pass
-    return False
-
-
-def _is_phone_like(dev, name):
-    if dev.idVendor == ACCESSORY_VID and dev.idProduct in ACCESSORY_PIDS:
-        return True
-    low = name.lower()
-    if any(w in low for w in ("android", "essential", "ph-1", "mata", "qualcomm", "google")):
-        return True
-    return _has_vendor_interface(dev)
-
-
-def find_candidates():
-    init_backend()
-    phone = []
-    others = []
-    try:
-        for dev in usb.core.find(find_all=True):
-            try:
-                name = _device_name(dev)
-            except Exception:
-                name = ""
-            entry = (dev.idVendor, dev.idProduct, name or f"{dev.idVendor:04x}:{dev.idProduct:04x}")
-            if _is_phone_like(dev, name):
-                phone.append(entry)
-            else:
-                others.append(entry)
-    except Exception as e:
-        raise RuntimeError(f"USB enumeration failed: {e}")
-    return phone if phone else others
-
-
-def connect_accessory(vidpid, max_wait=5.0):
-    init_backend()
-    dev = find_accessory()
-    if dev is None:
-        dev = find_device([vidpid]) if vidpid else None
-        if dev is not None:
-            toggle_accessory_mode(dev, MANUFACTURER, MODEL, DESCRIPTION, VERSION, URI, SERIAL)
-            deadline = time.monotonic() + max_wait
-            dev = None
-            while time.monotonic() < deadline:
-                dev = find_accessory()
-                if dev is not None:
-                    break
-                time.sleep(0.1)
-    if dev is None:
-        raise RuntimeError("Could not enter Android accessory mode. Is the phone plugged in, unlocked, and USB debugging on?")
-    return dev
-
-
-def _bulk_endpoints(dev):
-    key = (dev.bus, dev.address)
-    if key in _EP_CACHE:
-        return _EP_CACHE[key]
-    ep_in = ep_out = None
-    try:
-        # in accessory mode the phone shows up as a composite device, so
-        # we have to grab the actual accessory interface or we might end up
-        # on e.g. the ADB pipe where writes "succeed" but go nowhere
-        accessory_intf = None
-        for intf in dev.get_active_configuration().interfaces():
-            if intf.bInterfaceClass == 0xFF:
-                accessory_intf = intf
-                break
-        if accessory_intf is None:
-            raise RuntimeError("No vendor-specific (accessory) interface found on device")
-        for ep in accessory_intf.endpoints():
-            if ep.bmAttributes != usb.util.ENDPOINT_TYPE_BULK:
-                continue
-            ep_addr = ep.bEndpointAddress
-            if usb.util.endpoint_direction(ep_addr) == usb.util.ENDPOINT_IN:
-                ep_in = ep
-            else:
-                ep_out = ep
-    except Exception:
-        pass
-    if ep_in is None or ep_out is None:
-        raise RuntimeError("Accessory bulk endpoints not found")
-    _EP_CACHE[key] = (ep_in, ep_out)
-    return ep_in, ep_out
-
-
-def send_frame(dev, payload):
-    # plain newline-delimited json, already ends in "\n"
-    ep_out = _bulk_endpoints(dev)[1]
-    ep_out.write(bytes(payload), timeout=3000)
-
-
-def send_messages(dev, msgs):
-    if not msgs:
-        return
-    ep_out = _bulk_endpoints(dev)[1]
-    buf = b"".join(m for m in msgs if m)
-    if buf:
-        ep_out.write(buf, timeout=3000)
-
-
-_RECV_BUF = {}
-
-
-def receive_line(dev, timeout=0.2, max_read=65536):
-    # no length prefix on the wire, so a single read can have a partial
-    # line, one line, or several all mashed together. keep a per-device
-    # buffer and hand back one complete line at a time.
-    key = (dev.bus, dev.address)
-    buf = _RECV_BUF.setdefault(key, bytearray())
-
-    idx = buf.find(b"\n")
-    if idx != -1:
-        line = bytes(buf[:idx])
-        del buf[:idx + 1]
-        return line
-
-    ep_in = _bulk_endpoints(dev)[0]
-    try:
-        chunk = ep_in.read(max_read, int(timeout * 1000))
-        buf += bytes(chunk)
-    except usb.core.USBTimeoutError:
-        return None  # nothing new - normal
-
-    idx = buf.find(b"\n")
-    if idx != -1:
-        line = bytes(buf[:idx])
-        del buf[:idx + 1]
-        return line
-    return None  # got bytes but no full line yet
-
-
-def _usb_error_hint(e):
-    s = str(e)
-    low = s.lower()
-    if any(t in low for t in ("not supported", "unimplemented", "access denied", "insufficient permission", "pipe error")):
-        return (s
-                + " - WinUSB driver not bound to accessory-mode 18D1:2D00. "
-                  "Run: powershell -ExecutionPolicy Bypass -File setup_accessory_driver.ps1")
-    return s
-
-
-# tkinter is fine for this lol
 class TKApp:
     def __init__(self, root):
         self.root = root
@@ -285,25 +22,28 @@ class TKApp:
         self.ip_var = tk.StringVar(value="10.22.7.2")
         self.usb_var = tk.StringVar()
         self.connected = False
+
         self._stop = threading.Event()
         self._thread = None
         self._thread_io = None
-        self._dev = None
+
+        self.usb = USBHandler()
+        self.nt = NTHandler()
+
         self._candidates = []
-        self._inst = None
-        self._poller = None
         self._subscribed = None
         self._pending_initial_push = None
         self._push_first = False
         self._next_push_retry = 0.0
+
         self._sub_lock = threading.Lock()
         self._last_write_err = 0.0
         self._write_err_count = 0
 
-        self._build_ui()
-        self._refresh_devices()
+        self._make_ui()
+        self._rescan_for_usb_devices()
 
-    def _build_ui(self):
+    def _make_ui(self):
         main = ttk.Frame(self.root, padding="12")
         main.pack(fill=tk.BOTH, expand=True)
 
@@ -312,51 +52,105 @@ class TKApp:
 
         row = ttk.Frame(conn)
         row.pack(fill=tk.X, pady=2)
+
         ttk.Label(row, text="Server IP:", width=12).pack(side=tk.LEFT)
-        self.ip_entry = ttk.Entry(row, textvariable=self.ip_var, width=25)
+
+        self.ip_entry = ttk.Entry(
+            row,
+            textvariable=self.ip_var,
+            width=25,
+        )
         self.ip_entry.pack(side=tk.LEFT)
 
         row = ttk.Frame(conn)
         row.pack(fill=tk.X, pady=2)
+
         ttk.Label(row, text="USB Device:", width=12).pack(side=tk.LEFT)
-        self.usb_combo = ttk.Combobox(row, textvariable=self.usb_var, width=28, state="readonly")
+
+        self.usb_combo = ttk.Combobox(
+            row,
+            textvariable=self.usb_var,
+            width=28,
+            state="readonly",
+        )
         self.usb_combo.pack(side=tk.LEFT)
-        ttk.Button(row, text="Refresh", command=self._refresh_devices, width=8).pack(side=tk.LEFT, padx=(6, 0))
+
+        ttk.Button(
+            row,
+            text="Refresh",
+            command=self._rescan_for_usb_devices,
+            width=8,
+        ).pack(side=tk.LEFT, padx=(6, 0))
 
         ctrl = ttk.Frame(main)
         ctrl.pack(fill=tk.X, pady=(0, 8))
-        self.connect_btn = ttk.Button(ctrl, text="Connect and Run", command=self._toggle)
+
+        self.connect_btn = ttk.Button(
+            ctrl,
+            text="Connect and Run",
+            command=self._toggle,
+        )
         self.connect_btn.pack(side=tk.LEFT)
-        self.status_label = ttk.Label(ctrl, text="  Disconnected", foreground="gray")
+
+        self.status_label = ttk.Label(
+            ctrl,
+            text="  Disconnected",
+            foreground="gray",
+        )
         self.status_label.pack(side=tk.LEFT)
 
         log_frame = ttk.LabelFrame(main, text="Log", padding="4")
         log_frame.pack(fill=tk.BOTH, expand=True)
-        self.log_text = tk.Text(log_frame, height=10, state=tk.DISABLED, wrap=tk.WORD, font=("Consolas", 9))
-        sb = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.log_text = tk.Text(
+            log_frame,
+            height=10,
+            state=tk.DISABLED,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+        )
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-    def _refresh_devices(self):
+        sb = ttk.Scrollbar(
+            log_frame,
+            orient=tk.VERTICAL,
+            command=self.log_text.yview,
+        )
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.log_text.configure(yscrollcommand=sb.set)
+
+    def _rescan_for_usb_devices(self):
         try:
-            candidates = find_candidates()
+            candidates = self.usb.find_options()
         except Exception as e:
             self._log(f"Device scan failed: {e}")
             return
+
         self._candidates = candidates
-        self.usb_combo["values"] = [c[2] for c in candidates]
+        self.usb_combo["values"] = [candidate[2] for candidate in candidates]
+
         if candidates and not self.usb_var.get():
             self.usb_var.set(candidates[0][2])
 
     def _log(self, msg):
+        if threading.current_thread() is not threading.main_thread():
+            self.root.after(0, self._log, msg)
+            return
+
+        self._append_log(msg)
+
+    def _append_log(self, msg):
         self.log_text.configure(state=tk.NORMAL)
-        self.log_text.insert(tk.END, msg + "\n")
+        self.log_text.insert(tk.END, str(msg) + "\n")
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
     def _set_status(self, text, color="gray"):
-        self.status_label.config(text=f"  {text}", foreground=color)
+        self.status_label.config(
+            text=f"  {text}",
+            foreground=color,
+        )
 
     def _toggle(self):
         if self.connected:
@@ -364,221 +158,202 @@ class TKApp:
         else:
             self._connect()
 
-    @staticmethod
-    def _parse_usb_msg(line: str, inst: ntcore.NetworkTableInstance):
-        data = json.loads(line)
-        if "subscribe" in data:
-            return ("subscribe", data.get("subscribe"))
-        key = data.get("key")
-        value = data.get("value")
-        if key is None or value is None:
-            return None
-        inst.getTable("").putValue(key, value)
-        return None
+    def _read_usb_msg(self, line):
+        return self.nt.read_usb_line(line)
 
-    @staticmethod
-    def _normalize_key(k):
-        k = k.strip()
-        if not k:
+    def _normalize_key(self, key):
+        key = key.strip()
+
+        if not key:
             return ""
-        k = "/".join(part for part in k.split("/") if part)
-        return "/" + k
 
-    def _fuzzy_topic_match(self, key, limit=5):
-        try:
-            tokens = [t for t in key.replace("/", " ").split() if t]
-        except Exception:
-            return []
-        if not tokens:
-            return []
-        names = [t.getName() for t in self._inst.getTopics()]
-        scored = []
-        for n in names:
-            nl = n.lower()
-            score = sum(1 for t in tokens if t.lower() in nl)
-            if score:
-                scored.append((score, n))
-        scored.sort(key=lambda x: (-x[0], x[1]))
-        return [n for _, n in scored[:limit]]
+        key = "/".join(part for part in key.split("/") if part)
+
+        return "/" + key
 
     def _handle_subscribe(self, subscribed):
         if not isinstance(subscribed, list):
-            self.root.after(0, self._log, "Bad subscribe list")
+            self._log("Bad subscribe list")
             return
-        keys = [self._normalize_key(str(s)) for s in subscribed]
-        keys = [k for k in keys if k]
+
+        keys = [self._normalize_key(str(value)) for value in subscribed]
+
+        keys = [key for key in keys if key]
+
         with self._sub_lock:
-            self._subscribed = set(keys) if keys else set()
-            self._pending_initial_push = list(keys)
+            current = self._subscribed or set()
+            new_keys = [key for key in keys if key not in current]
+
+            self._subscribed = current | set(keys)
+
+            pending = self._pending_initial_push or []
+            self._pending_initial_push = pending + new_keys
             self._push_first = True
+
         try:
             info = []
-            for k in keys:
-                t = self._inst.getTopic(k)
-                if t is None or not t.exists():
-                    info.append(f"{k}: exists=False")
-                    similar = self._fuzzy_topic_match(k)
-                    if similar:
-                        info.append(f"  suggests: {', '.join(repr(s) for s in similar)}")
-                else:
-                    info.append(f"{k}: exists=True type={t.getTypeString()}")
-            self.root.after(0, self._log, f"Subscribed topics: {'; '.join(info)}")
+
+            for key in keys:
+                topic_exists = self.nt.topic_exists(key)
+
+                if not topic_exists:
+                    info.append(f"failed to subscribe to {key}: it doesn't exist!")
+
+            # self._log(f"Subscribed topics: {'; '.join(info)}")
+
         except Exception as e:
-            self.root.after(0, self._log, f"Topic introspection failed: {e}")
-        shown = ", ".join(repr(k) for k in keys[:10]) + (" ..." if len(keys) > 10 else "")
-        self.root.after(0, self._log, f"Subscribed to {len(keys)} topics: {shown}")
+            self._log(f"Topic analysis failed: {e}")
+
+        shown = ", ".join(repr(key) for key in keys[:10])
+
+        if len(keys) > 10:
+            shown += " ..."
+
+        self._log(f"Subscribed to {len(keys)} topics: {shown}")
 
     def _build_current_value_messages(self, keys):
-        # grab the current value of each key so data shows up even for topics
-        # that aren't actively changing. a fresh NT4 sub needs a round trip
-        # first so poll it briefly. returns (msgs, still_waiting_keys).
-        pending = []
-        still_waiting = []
-        for key in keys:
-            try:
-                topic = self._inst.getTopic(key)
-                type_str = topic.getTypeString() if topic is not None else ""
-                value = None
-                try:
-                    v = self._inst.getEntry(key).getValue()
-                    if v is not None and v.isValid():
-                        value = v
-                except Exception:
-                    pass
-                if value is None and topic is not None and topic.exists():
-                    try:
-                        sub = topic.genericSubscribe()
-                        deadline = time.monotonic() + 0.5
-                        while time.monotonic() < deadline:
-                            v = sub.get()
-                            if v is not None and v.isValid():
-                                value = v
-                                break
-                            time.sleep(0.02)
-                    except Exception:
-                        pass
-                if value is None:
-                    still_waiting.append(key)
-                    continue
-                msg = {
-                    "key": key,
-                    "type": type_str,
-                    "time": value.time() / 1_000_000.0,
-                }
-                if _registry.has_type(type_str):
-                    try:
-                        msg["schema"] = _registry.get_schema(type_str)
-                        msg["value"] = _registry.decode_type(type_str, value.value())
-                    except Exception:
-                        msg["value"] = value_to_json(value)
-                else:
-                    msg["value"] = value_to_json(value)
-                pending.append((json.dumps(msg) + "\n").encode("utf-8"))
-            except Exception:
-                still_waiting.append(key)
-        return pending, still_waiting
+        return self.nt.build_current_value_messages(keys)
 
     def _send_topic_listing(self, quiet=False):
         try:
-            topics = [t.getName() for t in self._inst.getTopics()]
+            topics = self.nt.get_topics()
+
             with self._sub_lock:
                 self._subscribed = None
+
             msg = json.dumps({"topics": topics}) + "\n"
+
             try:
-                send_frame(self._dev, msg.encode("utf-8"))
+                self.usb.send_frame(msg.encode("utf-8"))
             except usb.core.USBTimeoutError:
                 time.sleep(0.5)
-                send_frame(self._dev, msg.encode("utf-8"))
+                self.usb.send_frame(msg.encode("utf-8"))
+
             if not quiet:
-                self.root.after(0, self._log, f"Sent {len(topics)} topic names")
+                self._log(f"Sent {len(topics)} topic names")
+
         except usb.core.USBTimeoutError:
             if not quiet:
-                self.root.after(0, self._log, "Topic listing write timed out; retrying automatically")
+                self._log("Topic listing write timed out; retrying...")
+
         except Exception as e:
             if not quiet:
-                self.root.after(0, self._log, f"Topic listing error: {e}")
+                self._log(f"Topic listing error: {e}")
 
     def _usb_to_nt(self):
         last_err_log = 0.0
+
         while not self._stop.is_set():
-            dev = self._dev
-            if dev is None:
+            if not self.usb.is_connected():
                 time.sleep(0.05)
                 continue
+
             try:
-                raw = receive_line(dev)
+                raw = self.usb.receive_line()
+
             except usb.core.USBTimeoutError as e:
                 now = time.monotonic()
+
                 if now - last_err_log > 3:
-                    self.root.after(0, self._log, f"USB read timeout (retrying): {_usb_error_hint(e)}")
+                    self._log(f"USB read timeout (retrying): {self.usb.error_hint(e)}")
                     last_err_log = now
+
                 continue
+
             except Exception as e:
-                self.root.after(0, self._log, f"USB read error: {_usb_error_hint(e)}")
+                self._log(f"USB read error: {self.usb.error_hint(e)}")
                 break
+
             if not raw:
                 continue
-            line = raw.decode("utf-8", "replace").strip()
-            self.root.after(0, self._log, f"<< {line}")
+
+            line = raw.decode(
+                "utf-8",
+                "replace",
+            ).strip()
+
+            self._log(f"<< {line}")
+
             try:
-                result = self._parse_usb_msg(line, self._inst)
+                result = self._read_usb_msg(line)
+
                 if result is not None and result[0] == "subscribe":
                     self._handle_subscribe(result[1])
+
             except (json.JSONDecodeError, ValueError) as e:
-                self.root.after(0, self._log, f"Bad USB message: {e}")
+                self._log(f"Bad USB message: {e}")
 
     def _connect(self):
         ip = self.ip_var.get().strip()
         label = self.usb_var.get()
+
         if not ip:
-            tk.messagebox.showwarning("Missing", "Enter a server IP address.")
+            messagebox.showwarning(
+                "Missing",
+                "Enter a server IP address.",
+            )
             return
+
         if not label or not self._candidates:
-            tk.messagebox.showwarning("Missing", "Plug in the phone and select a USB device.")
+            messagebox.showwarning(
+                "Missing",
+                "Plug in the phone and select a USB device.",
+            )
             return
-        match = next((c for c in self._candidates if c[2] == label), None)
+
+        match = next(
+            (candidate for candidate in self._candidates if candidate[2] == label),
+            None,
+        )
+
         if match is None:
-            tk.messagebox.showwarning("Missing", "Selected USB device is no longer present. Refresh.")
+            messagebox.showwarning(
+                "Missing",
+                "Selected USB device must've been unplugged. Refreshing.",
+            )
+            self._rescan_for_usb_devices()
             return
 
         self._stop.clear()
-        self.connected = True
+        self.connected = False
+
         self.connect_btn.config(text="Disconnect")
-        self._set_status(f"Connecting to {ip}...", "orange")
+        self._set_status(
+            f"Connecting to {ip}...",
+            "orange",
+        )
+
         self._log(f"Opening USB device {label}")
         self._log(f"Connecting to NT server {ip}...")
 
-        self._thread = threading.Thread(target=self._run, args=(ip, (match[0], match[1])), daemon=True)
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(ip, (match[0], match[1])),
+            daemon=True,
+        )
         self._thread.start()
-        self._thread_io = threading.Thread(target=self._usb_to_nt, daemon=True)
+
+        self._thread_io = threading.Thread(
+            target=self._usb_to_nt,
+            daemon=True,
+        )
         self._thread_io.start()
 
     def _disconnect(self):
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=3)
-            self._thread = None
-        if self._thread_io:
-            self._thread_io.join(timeout=3)
-            self._thread_io = None
-        self._dev = None
-        if self._poller:
-            try:
-                self._poller.close()
-            except Exception:
-                pass
-            self._poller = None
-        if self._inst:
-            try:
-                self._inst.stopClient()
-            except Exception:
-                pass
-            self._inst = None
+
+        self._thread = None
+        self._thread_io = None
+
+        self.usb.disconnect()
+        self.nt.disconnect()
+
         with self._sub_lock:
             self._subscribed = None
             self._pending_initial_push = None
-        _RECV_BUF.clear()
+
         self.connected = False
+
         self.connect_btn.config(text="Connect and Run")
         self._set_status("Disconnected", "gray")
         self._log("Disconnected.")
@@ -586,106 +361,143 @@ class TKApp:
     def _run(self, ip, vidpid):
         try:
             try:
-                self._dev = connect_accessory(vidpid)
+                self.usb.connect(vidpid)
             except Exception as e:
-                self.root.after(0, self._log, f"USB connect failed: {e}")
-                self.root.after(0, self._set_status, "USB connect failed", "red")
+                self._log(f"USB connect failed: {e}")
+                self.root.after(
+                    0,
+                    self._set_status,
+                    "USB connect failed",
+                    "red",
+                )
                 return
-            self.root.after(0, self._log, "Android accessory connected")
 
-            inst = ntcore.NetworkTableInstance.getDefault()
-            self._inst = inst
-            inst.setServer(ip)
-            inst.startClient4("NTOverSerial")
+            self._log("Android accessory connected")
 
-            poller = ntcore.NetworkTableListenerPoller(inst)
-            self._poller = poller
-            poller.addListener([""], ntcore.EventFlags.kValueRemote)
+            try:
+                self.nt.connect(
+                    ip,
+                    timeout=10,
+                )
+            except TimeoutError as e:
+                self._log(str(e))
+                self.root.after(
+                    0,
+                    self._set_status,
+                    "Connection timed out",
+                    "red",
+                )
+                return
 
-            timeout = 10
-            start = time.monotonic()
-            while not self._stop.is_set() and not inst.isConnected():
-                if time.monotonic() - start > timeout:
-                    self.root.after(0, self._log, f"Connection to {ip} timed out")
-                    self.root.after(0, self._set_status, "Connection timed out", "red")
-                    return
-                time.sleep(0.2)
+            self._log(f"Connected to {ip}")
 
-            self.root.after(0, self._log, f"Connected to {ip}")
-            self.root.after(0, self._set_status, f"Connected to {ip}", "green")
+            self.root.after(
+                0,
+                self._set_status,
+                f"Connected to {ip}",
+                "green",
+            )
+            
+            if self.usb.is_connected() and self.nt.is_connected():
+                self.connected = True
 
             self._send_topic_listing()
             last_topic_send = time.monotonic()
 
             while not self._stop.is_set():
-                dev = self._dev
-                if dev is None:
+                if not self.usb.is_connected():
                     break
-                events = poller.readQueue()
+
+                events = self.nt.read_events()
                 now = time.monotonic()
+
                 with self._sub_lock:
                     subscribed = self._subscribed
-                    push_keys = self._pending_initial_push if now >= self._next_push_retry else None
+
+                    if now >= self._next_push_retry:
+                        push_keys = self._pending_initial_push
+                    else:
+                        push_keys = None
+
                     if push_keys is not None:
                         self._pending_initial_push = None
                         self._next_push_retry = now + 0.5
+
                     push_first = self._push_first
                     self._push_first = False
-                if subscribed is None:
-                    if now - last_topic_send >= TOPIC_RESEND_INTERVAL:
+
+                if (subscribed is None) and (now - last_topic_send >= TOPIC_RESEND_INTERVAL):
                         self._send_topic_listing()
                         last_topic_send = now
+
                 pending = []
+
                 if push_keys:
                     msgs, still_waiting = self._build_current_value_messages(push_keys)
+
                     pending.extend(msgs)
+
                     if msgs:
-                        self.root.after(0, self._log, f"Sent current value for {len(msgs)} topic(s)")
+                        self._log(f"Sent current value for {len(msgs)} topic(s)")
+
                     if still_waiting:
                         with self._sub_lock:
-                            self._pending_initial_push = (self._pending_initial_push or []) + still_waiting
+                            current = self._pending_initial_push or []
+
+                            self._pending_initial_push = current + still_waiting
+
                         if push_first:
-                            self.root.after(0, self._log,
-                                            "No current value available yet for some topics; will keep trying")
-                for ev in events:
-                    msg = handle_event(ev, subscribed=subscribed)
+                            self._log(
+                                "No current value available yet for "
+                                "some topics; will keep trying"
+                            )
+
+                for event in events:
+                    msg = self.nt.handle_event(
+                        event,
+                        subscribed=subscribed,
+                    )
+
                     if msg:
                         pending.append(msg.encode("utf-8"))
+
                 if pending:
                     try:
-                        send_messages(dev, pending)
+                        self.usb.send_messages(pending)
+
                     except Exception as e:
                         now = time.monotonic()
                         self._write_err_count += 1
+
                         if now - self._last_write_err > 3:
-                            self.root.after(0, self._log, f"USB write error (x{self._write_err_count}): {_usb_error_hint(e)}")
+                            self._log(
+                                f"USB write error "
+                                f"(x{self._write_err_count}): "
+                                f"{self.usb.error_hint(e)}"
+                            )
+
                             self._last_write_err = now
                             self._write_err_count = 0
+
                 time.sleep(0.02)
 
         except Exception as e:
-            self.root.after(0, self._log, f"Error: {e}")
+            self._log(f"Error: {e}")
+
         finally:
-            self.root.after(0, self._disconnect)
+            self.connected = False
 
     def _on_close(self):
         self._stop.set()
+
         if self._thread:
             self._thread.join(timeout=2)
+
         if self._thread_io:
             self._thread_io.join(timeout=2)
-        self._dev = None
-        if self._poller:
-            try:
-                self._poller.close()
-            except Exception:
-                pass
-        if self._inst:
-            try:
-                self._inst.stopClient()
-            except Exception:
-                pass
-            self._inst = None
+
+        self.usb.disconnect()
+        self.nt.disconnect()
         self.root.destroy()
 
 if __name__ == "__main__":

@@ -52,15 +52,15 @@ function Write-Preset {
     param([string]$ExePath)
     $dir = Split-Path -Parent $ExePath
     $cfg = @"
-# auto-targets the NTOverSerial accessory device.
+# auto-targets the NTOverAOA accessory device.
 # if the dropdown ends up on the wrong interface (eg ADB), pick the one
 # that shows the vendor-specific accessory interface before installing.
 [device]
-  Description = "NTOverSerial Android Accessory"
+  Description = "NTOverAOA Android Accessory"
   VID = 0x18D1
   PID = 0x2D00
 "@
-    Set-Content -LiteralPath (Join-Path $dir 'ntoverserial.cfg') -Value $cfg -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $dir 'NTOverAOA.cfg') -Value $cfg -Encoding ASCII
 }
 
 $devs = @(Get-AccessoryDevices)
