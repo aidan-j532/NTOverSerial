@@ -297,7 +297,7 @@ class TKApp:
         if not label or not self._candidates:
             messagebox.showwarning(
                 "Missing",
-                "Plug in the phone and select a USB device.",
+                "Plug in the device and select a the USB device.",
             )
             return
 
