@@ -1,3 +1,4 @@
+import json
 import os
 import site
 import sys
@@ -91,7 +92,12 @@ class USBHandler:
         return f"{dev.idVendor:04x}:{dev.idProduct:04x} {name}".strip()
 
     def has_vendor_interface(self, dev):
-        for config in dev.configs():
+        try:
+            configs = dev.configs()
+        except Exception:
+            return False
+
+        for config in configs:
             for interface in config.interfaces():
                 if interface.bInterfaceClass == 0xFF:
                     return True
@@ -258,6 +264,20 @@ class USBHandler:
                 buf,
                 timeout=WRITE_TIMEOUT,
             )
+
+    def parse_line(self, line):
+        data = json.loads(line)
+
+        if "subscribe" in data:
+            return ("subscribe", data.get("subscribe"))
+
+        key = data.get("key")
+        value = data.get("value")
+
+        if key is None or value is None:
+            return None
+
+        return ("put", {"key": key, "value": value})
 
     def receive_line(self, timeout=0.2, max_read=65536):
         idx = self._recv_buf.find(b"\n")

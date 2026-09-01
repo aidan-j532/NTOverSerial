@@ -1,5 +1,8 @@
 param(
-    [switch]$Check
+    [switch]$Check,
+
+    [Alias('Yes')]
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Continue'
@@ -63,6 +66,91 @@ function Write-Preset {
     Set-Content -LiteralPath (Join-Path $dir 'NTOverAOA.cfg') -Value $cfg -Encoding ASCII
 }
 
+# return the pressed key, or $null if none / no interactive console
+function Test-KeyPressed {
+    try {
+        if ([Console]::KeyAvailable) {
+            return [Console]::ReadKey($true).Key
+        }
+    } catch {
+        # redirected input - key polling unavailable, countdown must simply run
+    }
+    return $null
+}
+
+# warn, then wait up to 5 seconds before allowing the driver change.
+# Enter proceeds now, any other key or Ctrl+C aborts, timeout proceeds.
+function Confirm-DriverChange {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Devices,
+        [switch]$Force
+    )
+
+    if ($Force) {
+        Write-Host "Driver change forced (-Force), skipping the countdown."
+        return $true
+    }
+
+    $abort = $false
+    $handler = [ConsoleCancelEventHandler]{
+        param($sender, $eventArgs)
+        $eventArgs.Cancel = $true
+        $script:abort = $true
+    }
+    [Console]::add_CancelKeyPress($handler)
+
+    try {
+        Write-Host ""
+        Write-Host "================ WARNING ================"
+        Write-Host "This replaces the Windows driver with WinUSB for:"
+        Write-Host ""
+        foreach ($d in $Devices) {
+            $srv = if ($null -eq $d.DriverService) { '(none)' } else { $d.DriverService }
+            Write-Host "  * $($d.FriendlyName)"
+            Write-Host "      Instance : $($d.InstanceId)"
+            Write-Host "      Status   : $($d.Status)"
+            Write-Host "      Driver   : $srv"
+        }
+        Write-Host ""
+        Write-Host "Only Android accessory devices (VID 18D1 / PID 2D00|2D01) are targeted."
+        Write-Host "Press ENTER to proceed now, any other key to abort,"
+        Write-Host "or wait for the countdown."
+
+        for ($i = 5; $i -ge 1; $i--) {
+            if ($abort) {
+                Write-Host ""
+                Write-Host "Aborted (Ctrl+C)."
+                return $false
+            }
+
+            $key = Test-KeyPressed
+
+            if ($key -ne $null) {
+                if ($key -eq [ConsoleKey]::Enter) {
+                    Write-Host ""
+                    Write-Host "Proceeding now."
+                    return $true
+                }
+
+                Write-Host ""
+                Write-Host "Aborted by keypress."
+                return $false
+            }
+
+            Write-Host -NoNewline "`r  $i..."
+            Start-Sleep -Seconds 1
+        }
+
+        Write-Host ""
+        Write-Host "Proceeding automatically."
+        return $true
+    }
+    finally {
+        [Console]::remove_CancelKeyPress($handler)
+    }
+}
+
 $devs = @(Get-AccessoryDevices)
 
 if ($devs.Count -eq 0) {
@@ -90,22 +178,58 @@ if (-not $zadig) {
     exit 1
 }
 
+$deviceInfo = @()
+
 foreach ($d in $devs) {
-    Write-Host "Found: $($d.FriendlyName)  [Instance: $($d.InstanceId)]  Status: $($d.Status)"
     $svc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverService' -ErrorAction SilentlyContinue).Data
+
     if ($d.Status -eq 'OK' -and $svc -eq 'WinUSB') {
-        Write-Host "Already bound to WinUSB. Ready to use in run.py."
+        Write-Host "Already bound to WinUSB: $($d.FriendlyName)  [$($d.InstanceId)]"
         continue
     }
+
+    Write-Host "Needs WinUSB: $($d.FriendlyName)  [$($d.InstanceId)]  Status: $($d.Status)  Driver: $svc"
+
     if ($Check) {
-        Write-Host "Not bound to WinUSB yet (service: $svc)."
-        exit 1
+        continue
     }
-    Write-Host "Binding WinUSB via Zadig ($zadig)..."
+
+    $deviceInfo += [pscustomobject]@{
+        FriendlyName  = $d.FriendlyName
+        InstanceId    = $d.InstanceId
+        Status        = $d.Status
+        DriverService = $svc
+    }
+}
+
+if ($deviceInfo.Count -eq 0) {
+    if ($Check) {
+        Write-Host "All Android accessory devices (18D1:2D00/2D01) are bound to WinUSB. Ready."
+        exit 0
+    }
+
+    Write-Host "All Android accessory devices are already bound to WinUSB. Nothing to do."
+    exit 0
+}
+
+if ($Check) {
+    Write-Host "Some Android accessory devices still need the WinUSB driver."
+    exit 1
 }
 
 Write-Ini $zadig
 Write-Preset $zadig
+
+if (-not (Confirm-DriverChange -Devices $deviceInfo -Force:$Force)) {
+    Write-Host "Driver change aborted. No drivers were touched."
+    exit 1
+}
+
+$present = @(Get-AccessoryDevices)
+if ($present.Count -eq 0) {
+    Write-Host "The accessory device disappeared during the countdown. Aborting before any driver change."
+    exit 1
+}
 
 Write-Host ""
 Write-Host "Zadig should open with the accessory device pre-selected and WinUSB as the target."

@@ -159,7 +159,7 @@ class TKApp:
             self._connect()
 
     def _read_usb_msg(self, line):
-        return self.nt.read_usb_line(line)
+        return self.usb.parse_line(line)
 
     def _normalize_key(self, key):
         key = key.strip()
@@ -277,8 +277,16 @@ class TKApp:
             try:
                 result = self._read_usb_msg(line)
 
-                if result is not None and result[0] == "subscribe":
-                    self._handle_subscribe(result[1])
+                if result is None:
+                    continue
+
+                kind, payload = result
+
+                if kind == "subscribe":
+                    self._handle_subscribe(payload)
+
+                elif kind == "put":
+                    self.nt.put_message(payload)
 
             except (json.JSONDecodeError, ValueError) as e:
                 self._log(f"Bad USB message: {e}")

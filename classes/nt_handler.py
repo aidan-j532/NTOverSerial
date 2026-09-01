@@ -94,22 +94,6 @@ class NTHandler:
 
         return True
 
-    def read_usb_line(self, line):
-        data = json.loads(line)
-
-        if "subscribe" in data:
-            return ("subscribe", data.get("subscribe"))
-
-        key = data.get("key")
-        value = data.get("value")
-
-        if key is None or value is None:
-            return None
-
-        self.put_message(data)
-
-        return None
-
     def build_outgoing(self, event, table_prefix="", subscribed=None):
         data = event.data
         key = data.topic.getName()
