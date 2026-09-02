@@ -6,7 +6,11 @@ import time
 
 import usb.core
 import usb.util
-from libusb._platform.windows import DLL_PATH
+
+if sys.platform == "win32":
+    from libusb._platform.windows import DLL_PATH
+else:
+    DLL_PATH = None
 
 from aoa import find_accessory, find_device, toggle_accessory_mode
 
@@ -47,6 +51,9 @@ class USBHandler:
         self._recv_buf = bytearray()
 
     def find_libusb_dll(self):
+        if sys.platform != "win32":
+            return None
+
         path = str(DLL_PATH)
 
         if os.path.isfile(path):
