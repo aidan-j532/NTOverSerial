@@ -15,7 +15,7 @@ class TKApp:
     def __init__(self, root):
         self.root = root
         self.root.title("NTOverAOA")
-        self.root.geometry("520x420")
+        self.root.geometry("560x480")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -37,17 +37,26 @@ class TKApp:
         self._next_push_retry = 0.0
 
         self._sub_lock = threading.Lock()
+        self._sub_info = {}
+        self._subs_dirty = False
         self._last_write_err = 0.0
         self._write_err_count = 0
 
         self._make_ui()
+        self._poll_subs_after = self.root.after(250, self._poll_subs_ui)
         self._rescan_for_usb_devices()
 
     def _make_ui(self):
-        main = ttk.Frame(self.root, padding="12")
+        main = ttk.Frame(self.root, padding="8")
         main.pack(fill=tk.BOTH, expand=True)
 
-        conn = ttk.LabelFrame(main, text="Connection", padding="8")
+        self.notebook = ttk.Notebook(main)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        conn_tab = ttk.Frame(self.notebook, padding="8")
+        self.notebook.add(conn_tab, text="Connection")
+
+        conn = ttk.LabelFrame(conn_tab, text="Connection", padding="8")
         conn.pack(fill=tk.X, pady=(0, 8))
 
         row = ttk.Frame(conn)
@@ -82,7 +91,7 @@ class TKApp:
             width=8,
         ).pack(side=tk.LEFT, padx=(6, 0))
 
-        ctrl = ttk.Frame(main)
+        ctrl = ttk.Frame(conn_tab)
         ctrl.pack(fill=tk.X, pady=(0, 8))
 
         self.connect_btn = ttk.Button(
@@ -99,7 +108,7 @@ class TKApp:
         )
         self.status_label.pack(side=tk.LEFT)
 
-        log_frame = ttk.LabelFrame(main, text="Log", padding="4")
+        log_frame = ttk.LabelFrame(conn_tab, text="Log", padding="4")
         log_frame.pack(fill=tk.BOTH, expand=True)
 
         self.log_text = tk.Text(
@@ -119,6 +128,35 @@ class TKApp:
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.log_text.configure(yscrollcommand=sb.set)
+
+        subs_tab = ttk.Frame(self.notebook, padding="8")
+        self.notebook.add(subs_tab, text="Subscriptions")
+
+        subs_head = ttk.Frame(subs_tab)
+        subs_head.pack(fill=tk.X, pady=(0, 6))
+
+        self.sub_count_label = ttk.Label(subs_head, text="0 subscribed")
+        self.sub_count_label.pack(side=tk.LEFT)
+
+        sub_list = ttk.Frame(subs_tab)
+        sub_list.pack(fill=tk.BOTH, expand=True)
+
+        self.sub_listbox = tk.Listbox(
+            sub_list,
+            height=12,
+            font=("Consolas", 10),
+            activestyle="none",
+        )
+        self.sub_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        sub_sb = ttk.Scrollbar(
+            sub_list,
+            orient=tk.VERTICAL,
+            command=self.sub_listbox.yview,
+        )
+        sub_sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.sub_listbox.configure(yscrollcommand=sub_sb.set)
 
     def _rescan_for_usb_devices(self):
         try:
@@ -186,6 +224,12 @@ class TKApp:
 
             self._subscribed = current | set(keys)
 
+            for key in keys:
+                if key not in self._sub_info:
+                    self._sub_info[key] = {"value": "", "time": None}
+
+            self._subs_dirty = True
+
             pending = self._pending_initial_push or []
             self._pending_initial_push = pending + new_keys
             self._push_first = True
@@ -210,6 +254,62 @@ class TKApp:
             shown += " ..."
 
         self._log(f"Subscribed to {len(keys)} topics: {shown}")
+
+    def _short_value(self, value):
+        try:
+            text = json.dumps(value)
+        except Exception:
+            text = str(value)
+
+        text = text.replace("\n", " ")
+
+        if len(text) > 80:
+            text = text[:77] + "..."
+
+        return text
+
+    def _note_sub_value(self, key, value):
+        display = self._short_value(value)
+
+        with self._sub_lock:
+            info = self._sub_info.get(key)
+
+            if info is not None and info["value"] != display:
+                info["value"] = display
+                info["time"] = time.time()
+                self._subs_dirty = True
+
+    def _poll_subs_ui(self):
+        dirty = False
+
+        with self._sub_lock:
+            if self._subs_dirty:
+                self._subs_dirty = False
+                dirty = True
+
+        if dirty:
+            self._rebuild_subs_tree()
+
+        self._poll_subs_after = self.root.after(250, self._poll_subs_ui)
+
+    def _rebuild_subs_tree(self):
+        with self._sub_lock:
+            items = sorted(self._sub_info.items())
+
+        self.sub_listbox.delete(0, tk.END)
+
+        for key, info in items:
+            if info["time"] is not None:
+                last = time.strftime("%H:%M:%S", time.localtime(info["time"]))
+            else:
+                last = "-"
+
+            self.sub_listbox.insert(
+                tk.END,
+                f"{key} = {info['value'] or '-'} ({last})",
+            )
+
+        self.sub_count_label.config(text=f"{len(items)} subscribed")
 
     def _build_current_value_messages(self, keys):
         return self.nt.build_current_value_messages(keys)
@@ -360,6 +460,13 @@ class TKApp:
             self._subscribed = None
             self._pending_initial_push = None
 
+            if self._sub_info:
+                self._sub_info.clear()
+
+            self._subs_dirty = True
+
+        self._rebuild_subs_tree()
+
         self.connected = False
 
         self.connect_btn.config(text="Connect and Run")
@@ -469,6 +576,15 @@ class TKApp:
                     if msg:
                         pending.append(msg.encode("utf-8"))
 
+                        try:
+                            parsed = json.loads(msg)
+                            self._note_sub_value(
+                                parsed.get("key", ""),
+                                parsed.get("value"),
+                            )
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+
                 if pending:
                     try:
                         self.usb.send_messages(pending)
@@ -497,6 +613,9 @@ class TKApp:
 
     def _on_close(self):
         self._stop.set()
+
+        if hasattr(self, "_poll_subs_after"):
+            self.root.after_cancel(self._poll_subs_after)
 
         if self._thread:
             self._thread.join(timeout=2)
