@@ -16,7 +16,7 @@ from aoa import find_accessory, find_device, toggle_accessory_mode
 
 # AOA vendor and product id stuff
 ACCESSORY_VID = 0x18D1
-ACCESSORY_PIDS = (0x2D00, 0x2D01)
+ACCESSORY_PIDS = (0x2D00, 0x2D01, 0x2D04, 0x2D05)
 
 MANUFACTURER = "NTOverAOA"
 MODEL = "Adapter"
@@ -204,7 +204,8 @@ class USBHandler:
         if dev is None:
             raise RuntimeError(
                 "Could not enter Android accessory mode. "
-                "Is the phone plugged in, unlocked, and USB debugging on?"
+                "Check that the phone is plugged in, unlocked, and that this "
+                "phone was selected in the USB device list."
             )
 
         self.device = dev

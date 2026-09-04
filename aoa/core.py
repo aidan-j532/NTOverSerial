@@ -1,6 +1,10 @@
 import usb.core
+import usb.util
 
-ACCESSORY_IDS = [(0x18D1, 0x2D00), (0x18D1, 0x2D01)]
+# Android Open Accessory v2 devices may expose one of these PIDs depending on
+# whether ADB and/or audio are enabled. These are the modes that include the
+# bulk accessory interface; 2D02 and 2D03 are audio-only.
+ACCESSORY_IDS = [(0x18D1, product_id) for product_id in (0x2D00, 0x2D01, 0x2D04, 0x2D05)]
 
 
 def find_device(known_devices):
@@ -16,7 +20,16 @@ def find_accessory():
 
 def toggle_accessory_mode(device, manufacturer, model, description, version, uri, sn):
     # Switch the device into Android Open Accessory mode
-    device.ctrl_transfer(usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_IN, 51, 0, 0, 256)
+    protocol = device.ctrl_transfer(
+        usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_IN,
+        51,
+        0,
+        0,
+        2,
+    )
+
+    if len(protocol) != 2 or int(protocol[0]) | (int(protocol[1]) << 8) < 1:
+        raise RuntimeError("Connected USB device does not support Android Open Accessory mode")
 
     device.ctrl_transfer(
         usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_OUT, 52, 0, 0, manufacturer
