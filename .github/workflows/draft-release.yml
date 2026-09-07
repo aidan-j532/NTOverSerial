@@ -48,12 +48,6 @@ jobs:
           name: NTOverAOA-windows-x86_64
           path: release-assets/windows
 
-      - name: Download Windows ARM64 executable
-        uses: actions/download-artifact@v4
-        with:
-          name: NTOverAOA-windows-arm64
-          path: release-assets/windows
-
       - name: Attach version to release filenames
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -64,8 +58,6 @@ jobs:
             "release-assets/linux/NTOverAOA-linux-arm64-${RELEASE_TAG}.run"
           mv release-assets/windows/NTOverAOA.exe \
             "release-assets/windows/NTOverAOA-windows-x86_64-${RELEASE_TAG}.exe"
-          mv release-assets/windows/NTOverAOA-windows-arm64.exe \
-            "release-assets/windows/NTOverAOA-windows-arm64-${RELEASE_TAG}.exe"
 
       - name: Create draft GitHub release
         uses: softprops/action-gh-release@v2
@@ -89,4 +81,3 @@ jobs:
             release-assets/linux/NTOverAOA-linux-x86_64-${{ inputs.tag }}.run
             release-assets/linux/NTOverAOA-linux-arm64-${{ inputs.tag }}.run
             release-assets/windows/NTOverAOA-windows-x86_64-${{ inputs.tag }}.exe
-            release-assets/windows/NTOverAOA-windows-arm64-${{ inputs.tag }}.exe
