@@ -19,6 +19,9 @@ class TKApp:
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        self.style = ttk.Style()
+        self.style.theme_use("clam")
+
         self.ip_var = tk.StringVar(value="10.22.7.2")
         self.usb_var = tk.StringVar()
         self.connected = False
