@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, for example v1.2.0
+        description: Version tag, for example v1.2.0 or v1.2.0-beta
         required: true
         type: string
 
@@ -31,11 +31,36 @@ jobs:
           name: NTOverAOA-linux-x86_64
           path: release-assets/linux
 
+      - name: Download Linux ARM64 executable
+        uses: actions/download-artifact@v4
+        with:
+          name: NTOverAOA-linux-arm64
+          path: release-assets/linux
+
       - name: Download Windows executable
         uses: actions/download-artifact@v4
         with:
           name: NTOverAOA-windows-x86_64
           path: release-assets/windows
+
+      - name: Download Windows ARM64 executable
+        uses: actions/download-artifact@v4
+        with:
+          name: NTOverAOA-windows-arm64
+          path: release-assets/windows
+
+      - name: Attach version to release filenames
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mv release-assets/linux/NTOverAOA-linux-x86_64.run \
+            "release-assets/linux/NTOverAOA-linux-x86_64-${RELEASE_TAG}.run"
+          mv release-assets/linux/NTOverAOA-linux-arm64.run \
+            "release-assets/linux/NTOverAOA-linux-arm64-${RELEASE_TAG}.run"
+          mv release-assets/windows/NTOverAOA.exe \
+            "release-assets/windows/NTOverAOA-windows-x86_64-${RELEASE_TAG}.exe"
+          mv release-assets/windows/NTOverAOA-windows-arm64.exe \
+            "release-assets/windows/NTOverAOA-windows-arm64-${RELEASE_TAG}.exe"
 
       - name: Create draft GitHub release
         uses: softprops/action-gh-release@v2
@@ -45,14 +70,17 @@ jobs:
           draft: true
           generate_release_notes: true
           body: |
-            ## Included builds
+            On Linux, make the downloaded file executable before launching it:
 
-            Download the build for your platform:
+            ```bash
+            chmod +x NTOverAOA-linux-x86_64-${{ inputs.tag }}.run
+            ./NTOverAOA-linux-x86_64-${{ inputs.tag }}.run
 
-            - Linux x86_64: `NTOverAOA`
-            - Windows x86_64: `NTOverAOA.exe`
-
-            This draft release was built automatically from the selected commit.
+            chmod +x NTOverAOA-linux-arm64-${{ inputs.tag }}.run
+            ./NTOverAOA-linux-arm64-${{ inputs.tag }}.run
+            ```
           files: |
-            release-assets/linux/NTOverAOA
-            release-assets/windows/NTOverAOA.exe
+            release-assets/linux/NTOverAOA-linux-x86_64-${{ inputs.tag }}.run
+            release-assets/linux/NTOverAOA-linux-arm64-${{ inputs.tag }}.run
+            release-assets/windows/NTOverAOA-windows-x86_64-${{ inputs.tag }}.exe
+            release-assets/windows/NTOverAOA-windows-arm64-${{ inputs.tag }}.exe
