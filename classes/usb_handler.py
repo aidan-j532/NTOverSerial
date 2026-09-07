@@ -153,6 +153,7 @@ class USBHandler:
                     dev.idVendor,
                     dev.idProduct,
                     display_name,
+                    self._serial_number(dev),
                 )
 
                 if self.is_phone_like(dev, name):
@@ -167,6 +168,12 @@ class USBHandler:
             return phone
 
         return others
+
+    def _serial_number(self, dev):
+        try:
+            return dev.serial_number or ""
+        except Exception:
+            return ""
 
     def connect(self, vidpid, max_wait=5.0):
         self.init_backend()

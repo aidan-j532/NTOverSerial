@@ -1,12 +1,15 @@
 import json
+import os
 import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
+import crossfiledialog
 
 import usb.core
 
 from classes.nt_handler import NTHandler
+from classes.apk_installer import install_apk
 from classes.usb_handler import USBHandler
 
 TOPIC_RESEND_INTERVAL = 10.0
@@ -24,11 +27,13 @@ class TKApp:
 
         self.ip_var = tk.StringVar(value="10.22.7.2")
         self.usb_var = tk.StringVar()
+        self.apk_var = tk.StringVar()
         self.connected = False
 
         self._stop = threading.Event()
         self._thread = None
         self._thread_io = None
+        self._install_thread = None
 
         self.usb = USBHandler()
         self.nt = NTHandler()
@@ -132,6 +137,47 @@ class TKApp:
 
         self.log_text.configure(yscrollcommand=sb.set)
 
+        setup_tab = ttk.Frame(self.notebook, padding="8")
+        self.notebook.add(setup_tab, text="Setup")
+
+        apk_frame = ttk.LabelFrame(setup_tab, text="Install APK", padding="8")
+        apk_frame.pack(fill=tk.X, pady=(0, 8))
+
+        row = ttk.Frame(apk_frame)
+        row.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row, text="APK file:", width=12).pack(side=tk.LEFT)
+
+        ttk.Entry(
+            row,
+            textvariable=self.apk_var,
+            width=35,
+            state="readonly",
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        ttk.Button(
+            row,
+            text="Browse...",
+            command=self._choose_apk,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        self.install_btn = ttk.Button(
+            apk_frame,
+            text="Install on Selected Device",
+            command=self._install_apk,
+        )
+        self.install_btn.pack(anchor=tk.W, pady=(8, 0))
+
+        self.install_status_label = ttk.Label(
+            setup_tab,
+            text="Select an APK and a USB device.",
+            foreground="gray",
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=500,
+        )
+        self.install_status_label.pack(fill=tk.X, anchor=tk.W)
+
         subs_tab = ttk.Frame(self.notebook, padding="8")
         self.notebook.add(subs_tab, text="Subscriptions")
 
@@ -173,6 +219,89 @@ class TKApp:
 
         if candidates and not self.usb_var.get():
             self.usb_var.set(candidates[0][2])
+
+    def _choose_apk(self):
+        path = crossfiledialog.open_file(
+            title="Select APK",
+            start_dir=os.getcwd(),
+            filter="*.apk"
+        )   
+
+        if path:
+            self.apk_var.set(path)
+            self.install_status_label.config(
+                text="Ready to install on the selected device.",
+                foreground="gray",
+            )
+
+    def _install_apk(self):
+        apk_path = self.apk_var.get().strip()
+        label = self.usb_var.get()
+
+        if not apk_path or not os.path.isfile(apk_path):
+            messagebox.showwarning("Missing", "Select an APK file first.")
+            return
+
+        if not apk_path.lower().endswith(".apk"):
+            messagebox.showwarning("Invalid file", "Select an APK file.")
+            return
+
+        match = next(
+            (candidate for candidate in self._candidates if candidate[2] == label),
+            None,
+        )
+
+        if match is None:
+            messagebox.showwarning(
+                "Missing",
+                "Select a connected USB device and refresh the device list if needed.",
+            )
+            return
+
+        serial = match[3]
+
+        if not serial:
+            messagebox.showwarning(
+                "Missing device serial",
+                "The selected USB device does not expose an ADB serial number.",
+            )
+            return
+
+        self.install_btn.config(state=tk.DISABLED)
+        self.install_status_label.config(
+            text="Installing...",
+            foreground="orange",
+        )
+
+        self._install_thread = threading.Thread(
+            target=self._install_apk_worker,
+            args=(apk_path, serial),
+            daemon=True,
+        )
+        self._install_thread.start()
+
+    def _install_apk_worker(self, apk_path, serial):
+        try:
+            self._log(f"Installing {os.path.basename(apk_path)} on {serial}")
+            install_apk(apk_path, serial)
+
+            self.root.after(
+                0,
+                self._finish_apk_install,
+                "APK installed successfully.",
+                "green",
+            )
+        except Exception as e:
+            self.root.after(
+                0,
+                self._finish_apk_install,
+                f"APK install failed: {e}",
+                "red",
+            )
+
+    def _finish_apk_install(self, message, color):
+        self.install_btn.config(state=tk.NORMAL)
+        self.install_status_label.config(text=message, foreground=color)
 
     def _log(self, msg):
         if threading.current_thread() is not threading.main_thread():

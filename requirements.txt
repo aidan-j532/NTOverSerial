@@ -1,3 +1,5 @@
 pyntcore
 pyusb
 libusb>=1.0.26
+adb-shell[usb]
+crossfiledialog
