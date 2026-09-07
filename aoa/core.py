@@ -27,13 +27,19 @@ def toggle_accessory_mode(
     uri,
     sn,
 ):
-    protocol = device.ctrl_transfer(
-        usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_IN,
-        51,
-        0,
-        0,
-        2,
-    )
+    try:
+        protocol = device.ctrl_transfer(
+            usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_IN,
+            51,
+            0,
+            0,
+            2,
+        )
+    except Exception as e:
+        raise RuntimeError(f"AOA GET_PROTOCOL failed: {e}") from e
+
+    if len(protocol) < 2:
+        raise RuntimeError(f"AOA GET_PROTOCOL returned only {len(protocol)} byte(s)")
 
     protocol_version = int(protocol[0]) | (int(protocol[1]) << 8)
     print(f"AOA GET_PROTOCOL -> {protocol!r}")
@@ -64,16 +70,21 @@ def toggle_accessory_mode(
             )
             print(f"AOA SET_STRING value={value!r} succeeded: {result!r}")
         except Exception as e:
-            print(f"AOA SET_STRING value={value!r} failed: {e}")
+            raise RuntimeError(
+                f"AOA SET_STRING index={index} value={value!r} failed: {e}"
+            ) from e
 
     print("AOA START_ACCESSORY")
-    device.ctrl_transfer(
-        usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_OUT,
-        53,
-        0,
-        0,
-        None,
-    )
+    try:
+        device.ctrl_transfer(
+            usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_OUT,
+            53,
+            0,
+            0,
+            None,
+        )
+    except Exception as e:
+        raise RuntimeError(f"AOA START_ACCESSORY failed: {e}") from e
     print("AOA START_ACCESSORY returned")
 
     # The phone should now disconnect/re-enumerate.
