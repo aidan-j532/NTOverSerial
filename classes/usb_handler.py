@@ -22,8 +22,8 @@ MANUFACTURER = "NTOverAOA"
 MODEL = "Adapter"
 DESCRIPTION = "Sends NetworkTables Data to a Android Device With AOA"
 VERSION = "1.2"  # :)
-URI = ""
-SERIAL = ""
+URI = "https://github.com/aidan-j532/NTOverSerial"
+SERIAL = "NTOverAOA"
 
 WRITE_TIMEOUT = 3000
 
