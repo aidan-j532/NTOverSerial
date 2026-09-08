@@ -59,7 +59,13 @@ class USBHandler:
         if os.path.isfile(path):
             return path
 
-        roots = [sys.prefix]
+        roots = []
+
+        bundled_root = getattr(sys, "_MEIPASS", None)
+        if bundled_root:
+            roots.append(bundled_root)
+
+        roots.append(sys.prefix)
 
         roots += [path for path in site.getsitepackages() if os.path.isdir(path)]
 
@@ -84,7 +90,7 @@ class USBHandler:
         try:
             usb.core.find(find_all=True)
         except usb.core.NoBackendError:
-            raise RuntimeError("libusb DLL not found (run: pip install libusb)")
+            raise RuntimeError("libusb DLL not found")
 
     def device_name(self, dev):
         manufacturer = ""
