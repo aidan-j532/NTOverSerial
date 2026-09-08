@@ -64,6 +64,7 @@ jobs:
           $env:CL = '/DWDK_DIR="' + $wdkRoot.Replace('\', '/') + '"'
           $libwdiRoot = (Resolve-Path "third_party/libwdi").Path
           $solutionDir = "$libwdiRoot\"
+          $env:PATH = "$libwdiRoot\libwdi;$env:PATH"
 
           msbuild third_party/libwdi/libwdi/.msvc/embedder.vcxproj /m `
             /p:Configuration=Release /p:Platform=Win32 `
