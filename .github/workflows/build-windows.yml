@@ -62,10 +62,9 @@ jobs:
           }
 
           $wdkRoot = Split-Path (Split-Path (Split-Path (Split-Path $wdf.FullName -Parent) -Parent) -Parent) -Parent
-          $buildMacros = 'WDK_DIR=\"' + $wdkRoot.Replace('\', '/') + '\"'
+          $buildMacros = 'WDK_DIR="' + $wdkRoot.Replace('\', '/') + '"'
           $libwdiRoot = (Resolve-Path "third_party/libwdi").Path
           $solutionDir = "$libwdiRoot\"
-          $env:PATH = "$libwdiRoot\libwdi;$env:PATH"
 
           msbuild third_party/libwdi/libwdi/.msvc/embedder.vcxproj /m `
             /p:Configuration=Release /p:Platform=Win32 `
@@ -79,10 +78,18 @@ jobs:
           msbuild third_party/libwdi/libwdi/.msvc/installer_arm64.vcxproj /m `
             /p:Configuration=Release /p:Platform=ARM64 `
             /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros"
+
+          Push-Location "$libwdiRoot\libwdi"
+          & .\embedder.exe embedded.h
+          if ($LASTEXITCODE -ne 0) {
+            throw "libwdi embedder failed with exit code $LASTEXITCODE"
+          }
+          Pop-Location
+
           msbuild third_party/libwdi/libwdi/.msvc/libwdi_dll.vcxproj /m `
             /p:Configuration=Release /p:Platform=x64 `
             /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros" `
-            /p:BuildProjectReferences=false
+            /p:BuildProjectReferences=false /p:PreBuildEventUseInBuild=false
 
       - name: Build one-file executable
         run: >-
