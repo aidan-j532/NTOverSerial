@@ -92,6 +92,11 @@ jobs:
           }
           Pop-Location
 
+          $dllProjectPath = Join-Path $libwdiRoot "libwdi\.msvc\libwdi_dll.vcxproj"
+          $dllProject = Get-Content $dllProjectPath -Raw
+          $dllProject = $dllProject -replace '(?s)\s*<ItemGroup>\s*<ProjectReference\b.*?</ItemGroup>', ''
+          Set-Content $dllProjectPath $dllProject -NoNewline
+
           msbuild third_party/libwdi/libwdi/.msvc/libwdi_dll.vcxproj /m `
             /p:Configuration=Release /p:Platform=x64 `
             /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros" `
