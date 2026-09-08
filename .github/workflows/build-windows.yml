@@ -35,21 +35,22 @@ jobs:
         shell: pwsh
         run: |
           $wdkInstaller = Join-Path $env:RUNNER_TEMP "wdfcoinstaller.msi"
+          $wdkExtract = Join-Path $env:RUNNER_TEMP "wdk"
           Invoke-WebRequest `
             -Uri "https://go.microsoft.com/fwlink/p/?LinkID=253170" `
             -OutFile $wdkInstaller
 
-          $install = Start-Process msiexec.exe `
-            -ArgumentList @('/i', $wdkInstaller, '/qn', '/norestart') `
+          $extract = Start-Process msiexec.exe `
+            -ArgumentList @('/a', $wdkInstaller, '/qn', "TARGETDIR=$wdkExtract") `
             -Wait `
             -PassThru
 
-          if ($install.ExitCode -notin @(0, 3010)) {
-            throw "WDK redistributable installation failed with exit code $($install.ExitCode)"
+          if ($extract.ExitCode -ne 0) {
+            throw "WDK redistributable extraction failed with exit code $($extract.ExitCode)"
           }
 
           $wdf = Get-ChildItem `
-            -Path "${env:ProgramFiles(x86)}\Windows Kits" `
+            -Path $wdkExtract `
             -Filter WdfCoInstaller01011.dll `
             -File `
             -Recurse `
@@ -61,26 +62,27 @@ jobs:
           }
 
           $wdkRoot = Split-Path (Split-Path (Split-Path (Split-Path $wdf.FullName -Parent) -Parent) -Parent) -Parent
-          $env:CL = '/DWDK_DIR="' + $wdkRoot.Replace('\', '/') + '"'
+          $buildMacros = 'WDK_DIR=\"' + $wdkRoot.Replace('\', '/') + '\"'
           $libwdiRoot = (Resolve-Path "third_party/libwdi").Path
           $solutionDir = "$libwdiRoot\"
           $env:PATH = "$libwdiRoot\libwdi;$env:PATH"
 
           msbuild third_party/libwdi/libwdi/.msvc/embedder.vcxproj /m `
             /p:Configuration=Release /p:Platform=Win32 `
-            /p:SolutionDir="$solutionDir"
+            /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros"
           msbuild third_party/libwdi/libwdi/.msvc/installer_x86.vcxproj /m `
             /p:Configuration=Release /p:Platform=Win32 `
-            /p:SolutionDir="$solutionDir"
+            /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros"
           msbuild third_party/libwdi/libwdi/.msvc/installer_x64.vcxproj /m `
             /p:Configuration=Release /p:Platform=x64 `
-            /p:SolutionDir="$solutionDir"
+            /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros"
           msbuild third_party/libwdi/libwdi/.msvc/installer_arm64.vcxproj /m `
             /p:Configuration=Release /p:Platform=ARM64 `
-            /p:SolutionDir="$solutionDir"
+            /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros"
           msbuild third_party/libwdi/libwdi/.msvc/libwdi_dll.vcxproj /m `
             /p:Configuration=Release /p:Platform=x64 `
-            /p:SolutionDir="$solutionDir" /p:BuildProjectReferences=false
+            /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros" `
+            /p:BuildProjectReferences=false
 
       - name: Build one-file executable
         run: >-
