@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import threading
 import time
 import tkinter as tk
@@ -34,6 +35,7 @@ class TKApp:
         self._thread = None
         self._thread_io = None
         self._install_thread = None
+        self._driver_install_thread = None
 
         self.usb = USBHandler()
         self.nt = NTHandler()
@@ -167,6 +169,34 @@ class TKApp:
             command=self._install_apk,
         )
         self.install_btn.pack(anchor=tk.W, pady=(8, 0))
+
+        if sys.platform == "win32":
+            driver_frame = ttk.LabelFrame(
+                setup_tab,
+                text="Install WinUSB driver",
+                padding="8",
+            )
+            driver_frame.pack(fill=tk.X, pady=(0, 8))
+
+            ttk.Label(
+                driver_frame,
+                text="Replace the selected device driver with WinUSB.",
+            ).pack(anchor=tk.W)
+
+            self.driver_install_btn = ttk.Button(
+                driver_frame,
+                text="Install WinUSB on Selected Device",
+                command=self._install_winusb,
+            )
+            self.driver_install_btn.pack(anchor=tk.W, pady=(8, 0))
+
+            self.driver_install_status_label = ttk.Label(
+                driver_frame,
+                text="Select a USB device.",
+                foreground="gray",
+                wraplength=500,
+            )
+            self.driver_install_status_label.pack(fill=tk.X, pady=(6, 0))
 
         self.install_status_label = ttk.Label(
             setup_tab,
@@ -302,6 +332,62 @@ class TKApp:
     def _finish_apk_install(self, message, color):
         self.install_btn.config(state=tk.NORMAL)
         self.install_status_label.config(text=message, foreground=color)
+
+    def _install_winusb(self):
+        label = self.usb_var.get()
+        match = next(
+            (candidate for candidate in self._candidates if candidate[2] == label),
+            None,
+        )
+
+        if match is None:
+            messagebox.showwarning(
+                "Missing",
+                "Select a connected USB device and refresh the device list if needed.",
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Install WinUSB driver",
+            "This replaces the selected device driver with WinUSB and may require administrator approval. Continue?",
+        ):
+            return
+
+        self.driver_install_btn.config(state=tk.DISABLED)
+        self.driver_install_status_label.config(
+            text="Installing WinUSB driver... approve the Windows administrator prompt if shown.",
+            foreground="orange",
+        )
+        self._driver_install_thread = threading.Thread(
+            target=self._install_winusb_worker,
+            args=(match[0], match[1], label),
+            daemon=True,
+        )
+        self._driver_install_thread.start()
+
+    def _install_winusb_worker(self, vid, pid, description):
+        try:
+            from classes.winusb_installer import install_winusb_driver
+
+            self._log(f"Installing WinUSB on {description}")
+            install_winusb_driver(vid, pid, description)
+            self.root.after(
+                0,
+                self._finish_winusb_install,
+                "WinUSB driver installed successfully.",
+                "green",
+            )
+        except Exception as e:
+            self.root.after(
+                0,
+                self._finish_winusb_install,
+                f"WinUSB install failed: {e}",
+                "red",
+            )
+
+    def _finish_winusb_install(self, message, color):
+        self.driver_install_btn.config(state=tk.NORMAL)
+        self.driver_install_status_label.config(text=message, foreground=color)
 
     def _log(self, msg):
         if threading.current_thread() is not threading.main_thread():
