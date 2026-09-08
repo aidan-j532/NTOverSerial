@@ -36,9 +36,19 @@ jobs:
         run: |
           $wdkInstaller = Join-Path $env:RUNNER_TEMP "wdfcoinstaller.msi"
           $wdkExtract = Join-Path $env:RUNNER_TEMP "wdk"
+          $libusb0Zip = Join-Path $env:RUNNER_TEMP "libusb0-redist.zip"
+          $libusb0Extract = Join-Path $env:RUNNER_TEMP "libusb0"
+          $libusbkArchive = Join-Path $env:RUNNER_TEMP "libusbk-redist.7z"
+          $libusbkExtract = Join-Path $env:RUNNER_TEMP "libusbk"
           Invoke-WebRequest `
             -Uri "https://go.microsoft.com/fwlink/p/?LinkID=253170" `
             -OutFile $wdkInstaller
+          Invoke-WebRequest `
+            -Uri "https://github.com/mcuee/libusb-win32/releases/download/release_1.4.0.0/libusb-win32-bin-1.4.0.0.zip" `
+            -OutFile $libusb0Zip
+          Invoke-WebRequest `
+            -Uri "https://github.com/mcuee/libusbk/releases/download/V3.1.0.0/libusbK-3.1.0.0-bin.7z" `
+            -OutFile $libusbkArchive
 
           $extract = Start-Process msiexec.exe `
             -ArgumentList @('/a', $wdkInstaller, '/qn', "TARGETDIR=$wdkExtract") `
@@ -61,8 +71,33 @@ jobs:
             throw "WdfCoInstaller01011.dll was not found in the installed Windows Kits"
           }
 
+          New-Item -ItemType Directory -Path $libusb0Extract -Force | Out-Null
+          Expand-Archive -Path $libusb0Zip -DestinationPath $libusb0Extract -Force
+          $libusb0Root = Get-ChildItem `
+            -Path $libusb0Extract `
+            -Directory `
+            -Filter "libusb-win32*" `
+            | Select-Object -First 1
+          if (-not $libusb0Root) {
+            throw "libusb-win32 archive extraction failed"
+          }
+
+          New-Item -ItemType Directory -Path $libusbkExtract -Force | Out-Null
+          & 7z x $libusbkArchive "-o$libusbkExtract" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "libusbK archive extraction failed with exit code $LASTEXITCODE"
+          }
+          $libusbkRoot = Get-ChildItem `
+            -Path $libusbkExtract `
+            -Directory `
+            -Filter "libusbK*" `
+            | Select-Object -First 1
+          if (-not $libusbkRoot) {
+            throw "libusbK archive extraction failed"
+          }
+
           $wdkRoot = Split-Path (Split-Path (Split-Path (Split-Path $wdf.FullName -Parent) -Parent) -Parent) -Parent
-          $buildMacros = 'WDK_DIR="' + $wdkRoot.Replace('\', '/') + '"'
+          $buildMacros = 'WDK_DIR="' + $wdkRoot.Replace('\', '/') + '";LIBUSB0_DIR="' + $libusb0Root.FullName.Replace('\', '/') + '";LIBUSBK_DIR="' + (Join-Path $libusbkRoot.FullName "bin").Replace('\', '/') + '"'
           $libwdiRoot = (Resolve-Path "third_party/libwdi").Path
           $solutionDir = "$libwdiRoot\"
 
