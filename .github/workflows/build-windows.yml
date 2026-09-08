@@ -32,11 +32,28 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build libwdi
-        run: >-
-          msbuild third_party/libwdi/libwdi.sln
-          /m
-          /p:Configuration=Release
-          /p:Platform=x64
+        shell: pwsh
+        run: |
+          $wdf = Get-ChildItem `
+            -Path "${env:ProgramFiles(x86)}\Windows Kits" `
+            -Filter WdfCoInstaller01011.dll `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $wdf) {
+            throw "WdfCoInstaller01011.dll was not found in the installed Windows Kits"
+          }
+
+          $wdkRoot = Split-Path (Split-Path (Split-Path (Split-Path $wdf.FullName -Parent) -Parent) -Parent) -Parent
+          $env:CL = '/DWDK_DIR="' + $wdkRoot.Replace('\', '/') + '"'
+
+          msbuild third_party/libwdi/libwdi.sln `
+            /t:"libwdi (dll)" `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=x64
 
       - name: Build one-file executable
         run: >-
