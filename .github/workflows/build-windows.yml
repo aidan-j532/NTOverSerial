@@ -113,7 +113,9 @@ jobs:
           --collect-all ntcore
           --collect-all native
           --collect-all libusb
+          --hidden-import pkg_about
           --hidden-import usb.backend.libusb1
+          --copy-metadata libusb
           --add-binary "third_party/libwdi/x64/Release/dll/libwdi.dll;libwdi"
           run.py
 
