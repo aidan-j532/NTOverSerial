@@ -32,9 +32,11 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build libwdi
-        run: |
-          msbuild third_party/libwdi/libwdi/.msvc/embedder.vcxproj /m /p:Configuration=Release /p:Platform=Win32
-          msbuild third_party/libwdi/libwdi/.msvc/libwdi_dll.vcxproj /m /p:Configuration=Release /p:Platform=x64
+        run: >-
+          msbuild third_party/libwdi/libwdi.sln
+          /m
+          /p:Configuration=Release
+          /p:Platform=x64
 
       - name: Build one-file executable
         run: >-
