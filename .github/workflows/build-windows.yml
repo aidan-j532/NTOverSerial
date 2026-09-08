@@ -62,12 +62,24 @@ jobs:
 
           $wdkRoot = Split-Path (Split-Path (Split-Path (Split-Path $wdf.FullName -Parent) -Parent) -Parent) -Parent
           $env:CL = '/DWDK_DIR="' + $wdkRoot.Replace('\', '/') + '"'
+          $libwdiRoot = (Resolve-Path "third_party/libwdi").Path
+          $solutionDir = "$libwdiRoot\"
 
-          msbuild third_party/libwdi/libwdi.sln `
-            /t:"libwdi (dll)" `
-            /m `
-            /p:Configuration=Release `
-            /p:Platform=x64
+          msbuild third_party/libwdi/libwdi/.msvc/embedder.vcxproj /m `
+            /p:Configuration=Release /p:Platform=Win32 `
+            /p:SolutionDir="$solutionDir"
+          msbuild third_party/libwdi/libwdi/.msvc/installer_x86.vcxproj /m `
+            /p:Configuration=Release /p:Platform=Win32 `
+            /p:SolutionDir="$solutionDir"
+          msbuild third_party/libwdi/libwdi/.msvc/installer_x64.vcxproj /m `
+            /p:Configuration=Release /p:Platform=x64 `
+            /p:SolutionDir="$solutionDir"
+          msbuild third_party/libwdi/libwdi/.msvc/installer_arm64.vcxproj /m `
+            /p:Configuration=Release /p:Platform=ARM64 `
+            /p:SolutionDir="$solutionDir"
+          msbuild third_party/libwdi/libwdi/.msvc/libwdi_dll.vcxproj /m `
+            /p:Configuration=Release /p:Platform=x64 `
+            /p:SolutionDir="$solutionDir" /p:BuildProjectReferences=false
 
       - name: Build one-file executable
         run: >-
