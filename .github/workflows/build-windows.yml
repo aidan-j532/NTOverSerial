@@ -117,6 +117,7 @@ jobs:
           --hidden-import usb.backend.libusb1
           --copy-metadata libusb
           --copy-metadata pkg-about
+          --copy-metadata py-utlx
           --add-binary "third_party/libwdi/x64/Release/dll/libwdi.dll;libwdi"
           run.py
 
