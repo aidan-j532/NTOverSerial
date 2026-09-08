@@ -66,6 +66,12 @@ jobs:
           $libwdiRoot = (Resolve-Path "third_party/libwdi").Path
           $solutionDir = "$libwdiRoot\"
 
+          $configPath = Join-Path $libwdiRoot "msvc\config.h"
+          $config = Get-Content $configPath -Raw
+          $config = $config -replace '(?ms)^#ifndef LIBUSB0_DIR.*?^#endif\s*', ''
+          $config = $config -replace '(?ms)^#ifndef LIBUSBK_DIR.*?^#endif\s*', ''
+          Set-Content $configPath $config -NoNewline
+
           msbuild third_party/libwdi/libwdi/.msvc/embedder.vcxproj /m `
             /p:Configuration=Release /p:Platform=Win32 `
             /p:SolutionDir="$solutionDir" /p:BuildMacros="$buildMacros"
