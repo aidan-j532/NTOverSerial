@@ -34,6 +34,20 @@ jobs:
       - name: Build libwdi
         shell: pwsh
         run: |
+          $wdkInstaller = Join-Path $env:RUNNER_TEMP "wdfcoinstaller.msi"
+          Invoke-WebRequest `
+            -Uri "https://go.microsoft.com/fwlink/p/?LinkID=253170" `
+            -OutFile $wdkInstaller
+
+          $install = Start-Process msiexec.exe `
+            -ArgumentList @('/i', $wdkInstaller, '/qn', '/norestart') `
+            -Wait `
+            -PassThru
+
+          if ($install.ExitCode -notin @(0, 3010)) {
+            throw "WDK redistributable installation failed with exit code $($install.ExitCode)"
+          }
+
           $wdf = Get-ChildItem `
             -Path "${env:ProgramFiles(x86)}\Windows Kits" `
             -Filter WdfCoInstaller01011.dll `
