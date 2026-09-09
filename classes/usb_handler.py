@@ -67,6 +67,16 @@ class USBHandler:
         bundled_root = getattr(sys, "_MEIPASS", None)
         if bundled_root:
             roots.append(bundled_root)
+            for architecture in ("x86_64", "x86", "arm64"):
+                roots.append(
+                    os.path.join(
+                        bundled_root,
+                        "libusb",
+                        "_platform",
+                        "windows",
+                        architecture,
+                    )
+                )
 
         roots.append(sys.prefix)
 

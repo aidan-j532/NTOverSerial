@@ -103,23 +103,26 @@ jobs:
             /p:BuildProjectReferences=false /p:PreBuildEventUseInBuild=false
 
       - name: Build one-file executable
-        run: >-
-          python -m PyInstaller
-          --noconfirm
-          --clean
-          --onefile
-          --windowed
-          --name NTOverAOA
-          --collect-all ntcore
-          --collect-all native
-          --collect-all libusb
-          --hidden-import pkg_about
-          --hidden-import usb.backend.libusb1
-          --copy-metadata libusb
-          --copy-metadata pkg-about
-          --copy-metadata py-utlx
-          --add-binary "third_party/libwdi/x64/Release/dll/libwdi.dll;libwdi"
-          run.py
+        shell: pwsh
+        run: |
+          $libusbDll = python -c "import pathlib,libusb; print(pathlib.Path(libusb.__file__).parent / '_platform' / 'windows' / 'x86_64' / 'libusb-1.0.dll')"
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --windowed `
+            --name NTOverAOA `
+            --collect-all ntcore `
+            --collect-all native `
+            --collect-all libusb `
+            --hidden-import pkg_about `
+            --hidden-import usb.backend.libusb1 `
+            --copy-metadata libusb `
+            --copy-metadata pkg-about `
+            --copy-metadata py-utlx `
+            --add-binary "${libusbDll};libusb/_platform/windows/x86_64" `
+            --add-binary "third_party/libwdi/x64/Release/dll/libwdi.dll;libwdi" `
+            run.py
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
