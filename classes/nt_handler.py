@@ -121,7 +121,7 @@ class NTHandler:
                 )
             else:
                 msg["value"] = value_to_json(data.value)
-        except Exception:
+        except Exception:  # noqa: BLE001 - fall back when a value cannot be serialized
             msg["value"] = value_to_json(data.value)
 
         return json.dumps(msg) + "\n"
@@ -232,12 +232,12 @@ class NTHandler:
                         )
                     else:
                         msg["value"] = value_to_json(value)
-                except Exception:
+                except Exception:  # noqa: BLE001 - fall back when a value cannot be serialized
                     msg["value"] = value_to_json(value)
 
                 pending.append((json.dumps(msg) + "\n").encode("utf-8"))
 
-            except Exception:
+            except Exception:  # noqa: BLE001 - leave unavailable topics for retry
                 still_waiting.append(key)
 
         return pending, still_waiting

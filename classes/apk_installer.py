@@ -63,7 +63,7 @@ def install_apk(apk_path, serial):
         if device is not None:
             try:
                 device.shell(f"rm -f {shlex.quote(remote_path)}")
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - cleanup must not mask install result
                 pass
 
             device.close()

@@ -124,7 +124,7 @@ class USBHandler:
     def has_vendor_interface(self, dev):
         try:
             configs = dev.configs()
-        except Exception:
+        except Exception:  # noqa: BLE001 - device inspection can fail per backend
             return False
 
         for config in configs:
@@ -164,7 +164,7 @@ class USBHandler:
             for dev in usb.core.find(find_all=True, backend=self._usb_backend):
                 try:
                     name = self.device_name(dev)
-                except Exception:
+                except Exception:  # noqa: BLE001 - one device must not abort scanning
                     name = ""
 
                 if name:
@@ -184,7 +184,7 @@ class USBHandler:
                 else:
                     others.append(entry)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - normalize backend errors for callers
             raise RuntimeError(f"USB enumeration failed: {e}")
 
         if phone:
@@ -195,7 +195,7 @@ class USBHandler:
     def _serial_number(self, dev):
         try:
             return dev.serial_number or ""
-        except Exception:
+        except Exception:  # noqa: BLE001 - serial access is optional
             return ""
 
     def connect(self, vidpid, max_wait=5.0):

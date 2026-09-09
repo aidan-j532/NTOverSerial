@@ -93,5 +93,5 @@ def toggle_accessory_mode(
     # Do not continue using the old PyUSB device object.
     try:
         usb.util.dispose_resources(device)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - cleanup must not mask the AOA result
         pass
