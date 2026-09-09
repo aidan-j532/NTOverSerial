@@ -65,7 +65,9 @@ def _dll_path():
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     candidates.append(
-        os.path.join(project_root, "third_party", "libwdi", "x64", "Release", "dll", "libwdi.dll")
+        os.path.join(
+            project_root, "third_party", "libwdi", "x64", "Release", "dll", "libwdi.dll"
+        )
     )
     candidates.append(os.path.join(project_root, "libwdi.dll"))
 
@@ -137,10 +139,14 @@ def install_winusb_driver(vid, pid, description=None):
 
     device_list = ctypes.POINTER(_WdiDeviceInfo)()
     list_options = _WdiCreateListOptions(1, 0, 1)
-    result = library.wdi_create_list(ctypes.byref(device_list), ctypes.byref(list_options))
+    result = library.wdi_create_list(
+        ctypes.byref(device_list), ctypes.byref(list_options)
+    )
 
     if result != 0:
-        raise RuntimeError(f"Could not enumerate USB devices: {_error_message(library, result)}")
+        raise RuntimeError(
+            f"Could not enumerate USB devices: {_error_message(library, result)}"
+        )
 
     try:
         matches = []
@@ -153,7 +159,9 @@ def install_winusb_driver(vid, pid, description=None):
             current = device.next
 
         if not matches:
-            raise RuntimeError(f"Selected device {vid:04x}:{pid:04x} is no longer connected")
+            raise RuntimeError(
+                f"Selected device {vid:04x}:{pid:04x} is no longer connected"
+            )
 
         selected = matches[0]
         if description:
@@ -184,7 +192,9 @@ def install_winusb_driver(vid, pid, description=None):
                 ctypes.byref(prepare_options),
             )
             if result != 0:
-                raise RuntimeError(f"Could not prepare WinUSB driver: {_error_message(library, result)}")
+                raise RuntimeError(
+                    f"Could not prepare WinUSB driver: {_error_message(library, result)}"
+                )
 
             install_options = _WdiInstallOptions(None, 0, 120000)
             result = library.wdi_install_driver(
@@ -194,6 +204,8 @@ def install_winusb_driver(vid, pid, description=None):
                 ctypes.byref(install_options),
             )
             if result != 0:
-                raise RuntimeError(f"Could not install WinUSB driver: {_error_message(library, result)}")
+                raise RuntimeError(
+                    f"Could not install WinUSB driver: {_error_message(library, result)}"
+                )
     finally:
         library.wdi_destroy_list(device_list)

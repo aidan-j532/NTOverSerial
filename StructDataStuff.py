@@ -136,7 +136,9 @@ class SchemaRegistry:
     def has_type(self, type_str):
         if self._resolve(type_str) is not None:
             return True
-        return bool(type_str.endswith("[]") and self._resolve(type_str[:-2]) is not None)
+        return bool(
+            type_str.endswith("[]") and self._resolve(type_str[:-2]) is not None
+        )
 
     def get_schema(self, struct_name):
         base = struct_name.removesuffix("[]")
