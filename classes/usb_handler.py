@@ -101,7 +101,7 @@ class USBHandler:
                 self._dll_directory_handle = os.add_dll_directory(dll_dir)
 
             self._usb_backend = usb.backend.libusb1.get_backend(
-                find_library=lambda: dll
+                find_library=lambda _candidate: dll
             )
 
         try:
