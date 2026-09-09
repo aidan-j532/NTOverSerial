@@ -248,6 +248,9 @@ class USBHandler:
         return self.device is not None
 
     def disconnect(self):
+        if self.device is not None:
+            usb.util.dispose_resources(self.device)
+
         self.device = None
         self._ep_in = None
         self._ep_out = None

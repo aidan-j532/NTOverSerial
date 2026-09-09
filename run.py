@@ -1,6 +1,8 @@
+import ctypes
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -353,6 +355,9 @@ class TKApp:
         ):
             return
 
+        if self.connected:
+            self._disconnect()
+
         self.driver_install_btn.config(state=tk.DISABLED)
         self.driver_install_status_label.config(
             text="Installing WinUSB driver... approve the Windows administrator prompt if shown.",
@@ -367,16 +372,16 @@ class TKApp:
 
     def _install_winusb_worker(self, vid, pid, description):
         try:
-            from classes.winusb_installer import install_winusb_driver
-
+            self.usb.disconnect()
             self._log(f"Installing WinUSB on {description}")
-            install_winusb_driver(vid, pid, description)
+            _run_elevated_winusb_install(vid, pid, description)
             self.root.after(
                 0,
                 self._finish_winusb_install,
                 "WinUSB driver installed successfully.",
                 "green",
             )
+            self.root.after(0, self._rescan_for_usb_devices)
         except Exception as e:
             self.root.after(
                 0,
@@ -845,7 +850,81 @@ class TKApp:
         self.nt.disconnect()
         self.root.destroy()
 
+
+def _run_elevated_winusb_install(vid, pid, description):
+    if sys.platform != "win32":
+        raise RuntimeError("WinUSB driver installation is only available on Windows")
+
+    request_fd, request_path = tempfile.mkstemp(prefix="ntoveraoa-driver-request-", suffix=".json")
+    result_fd, result_path = tempfile.mkstemp(prefix="ntoveraoa-driver-result-", suffix=".json")
+    os.close(request_fd)
+    os.close(result_fd)
+
+    try:
+        with open(request_path, "w", encoding="utf-8") as request_file:
+            json.dump({"vid": vid, "pid": pid, "description": description}, request_file)
+
+        if getattr(sys, "frozen", False):
+            executable = sys.executable
+            parameters = f'--install-winusb-elevated "{request_path}" "{result_path}"'
+        else:
+            executable = sys.executable
+            parameters = f'"{os.path.abspath(__file__)}" --install-winusb-elevated "{request_path}" "{result_path}"'
+
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            executable,
+            parameters,
+            None,
+            0,
+        )
+        if result <= 32:
+            raise RuntimeError(f"Windows elevation failed with code {result}")
+
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            if os.path.getsize(result_path) > 0:
+                with open(result_path, "r", encoding="utf-8") as result_file:
+                    response = json.load(result_file)
+                if response.get("ok"):
+                    return
+                raise RuntimeError(response.get("error", "WinUSB installation failed"))
+            time.sleep(0.1)
+
+        raise RuntimeError("Timed out waiting for the elevated WinUSB installer")
+    finally:
+        for path in (request_path, result_path):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+
+def _handle_elevated_winusb_install(request_path, result_path):
+    try:
+        from classes.winusb_installer import install_winusb_driver
+
+        with open(request_path, "r", encoding="utf-8") as request_file:
+            request = json.load(request_file)
+
+        install_winusb_driver(
+            request["vid"],
+            request["pid"],
+            request["description"],
+        )
+        response = {"ok": True}
+    except Exception as error:
+        response = {"ok": False, "error": str(error)}
+
+    with open(result_path, "w", encoding="utf-8") as result_file:
+        json.dump(response, result_file)
+
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "--install-winusb-elevated":
+        _handle_elevated_winusb_install(sys.argv[2], sys.argv[3])
+        raise SystemExit(0)
+
     root = tk.Tk()
     app = TKApp(root)
     root.mainloop()
