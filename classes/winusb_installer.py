@@ -126,6 +126,12 @@ def _device_description(device):
     return device.desc.decode("utf-8", errors="replace")
 
 
+def _device_driver(device):
+    if not device.driver:
+        return ""
+    return device.driver.decode("utf-8", errors="replace")
+
+
 def install_winusb_driver(vid, pid, description=None):
     library, dll_handle = _load_library()
 
@@ -155,6 +161,9 @@ def install_winusb_driver(vid, pid, description=None):
                 if _device_description(match.contents) == description:
                     selected = match
                     break
+
+        if "winusb" in _device_driver(selected.contents).lower():
+            return
 
         with tempfile.TemporaryDirectory(prefix="ntoveraoa-libwdi-") as driver_dir:
             inf_name = b"ntoveraoa-winusb.inf"
