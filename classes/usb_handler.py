@@ -6,6 +6,7 @@ import time
 
 import usb.core
 import usb.util
+import usb.backend.libusb1
 
 if sys.platform == "win32":
     from libusb._platform.windows import DLL_PATH
@@ -49,6 +50,8 @@ class USBHandler:
         self._ep_in = None
         self._ep_out = None
         self._recv_buf = bytearray()
+        self._usb_backend = None
+        self._dll_directory_handle = None
 
     def find_libusb_dll(self):
         if sys.platform != "win32":
@@ -85,10 +88,14 @@ class USBHandler:
             os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
 
             if hasattr(os, "add_dll_directory"):
-                os.add_dll_directory(dll_dir)
+                self._dll_directory_handle = os.add_dll_directory(dll_dir)
+
+            self._usb_backend = usb.backend.libusb1.get_backend(
+                find_library=lambda: dll
+            )
 
         try:
-            usb.core.find(find_all=True)
+            usb.core.find(find_all=True, backend=self._usb_backend)
         except usb.core.NoBackendError:
             raise RuntimeError("libusb DLL not found")
 
@@ -144,7 +151,7 @@ class USBHandler:
         others = []
 
         try:
-            for dev in usb.core.find(find_all=True):
+            for dev in usb.core.find(find_all=True, backend=self._usb_backend):
                 try:
                     name = self.device_name(dev)
                 except Exception:
