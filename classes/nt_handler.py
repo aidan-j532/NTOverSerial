@@ -9,11 +9,18 @@ from StructDataStuff import SchemaRegistry
 
 def value_to_json(v):
     value_type = v.type()
+    value = v.value()
 
-    if value_type == ntcore.NetworkTableType.kRaw:
-        return base64.b64encode(v.value()).decode("ascii")
+    if value_type == ntcore.NetworkTableType.kRaw or isinstance(
+        value, (bytes, bytearray, memoryview)
+    ):
+        return base64.b64encode(bytes(value)).decode("ascii")
 
-    return v.value()
+    try:
+        json.dumps(value)
+    except TypeError:
+        return str(value)
+    return value
 
 
 class NTHandler:
@@ -29,6 +36,7 @@ class NTHandler:
         self.poller = None
         self.ip = None
         self.connected = False
+        self._subscribers = {}
 
     def is_connected(self):
         if not self.connected:
@@ -67,6 +75,12 @@ class NTHandler:
     def disconnect(self):
         self.connected = False
 
+        for subscriber in self._subscribers.values():
+            close = getattr(subscriber, "close", None)
+            if close is not None:
+                close()
+        self._subscribers.clear()
+
         if self.poller is not None:
             self.poller.close()
 
@@ -94,6 +108,18 @@ class NTHandler:
 
         return True
 
+    def subscribe_topics(self, keys):
+        if self.inst is None:
+            return
+
+        for key in keys:
+            if key in self._subscribers:
+                continue
+
+            topic = self.inst.getTopic(key)
+            if topic is not None:
+                self._subscribers[key] = topic.genericSubscribe()
+
     def build_outgoing(self, event, table_prefix="", subscribed=None):
         data = event.data
         key = data.topic.getName()
@@ -112,16 +138,19 @@ class NTHandler:
             "time": data.value.time() / 1_000_000.0,
         }
 
+        schema = self.registry.get_schema(type_str)
+        if schema is not None:
+            msg["schema"] = schema
+
         try:
             if self.registry.has_type(type_str):
-                msg["schema"] = self.registry.get_schema(type_str)
                 msg["value"] = self.registry.decode_type(
                     type_str,
                     data.value.value(),
                 )
             else:
                 msg["value"] = value_to_json(data.value)
-        except Exception:
+        except Exception:  # noqa: BLE001 - fall back when a value cannot be serialized
             msg["value"] = value_to_json(data.value)
 
         return json.dumps(msg) + "\n"
@@ -201,7 +230,10 @@ class NTHandler:
                     value = current_value
 
                 if value is None and topic.exists():
-                    subscriber = topic.genericSubscribe()
+                    subscriber = self._subscribers.get(key)
+                    if subscriber is None:
+                        subscriber = topic.genericSubscribe()
+                        self._subscribers[key] = subscriber
                     deadline = time.monotonic() + 0.5
 
                     while time.monotonic() < deadline:
@@ -223,21 +255,24 @@ class NTHandler:
                     "time": value.time() / 1_000_000.0,
                 }
 
+                schema = self.registry.get_schema(type_str)
+                if schema is not None:
+                    msg["schema"] = schema
+
                 try:
                     if self.registry.has_type(type_str):
-                        msg["schema"] = self.registry.get_schema(type_str)
                         msg["value"] = self.registry.decode_type(
                             type_str,
                             value.value(),
                         )
                     else:
                         msg["value"] = value_to_json(value)
-                except Exception:
+                except Exception:  # noqa: BLE001 - fall back when a value cannot be serialized
                     msg["value"] = value_to_json(value)
 
                 pending.append((json.dumps(msg) + "\n").encode("utf-8"))
 
-            except Exception:
+            except Exception:  # noqa: BLE001 - leave unavailable topics for retry
                 still_waiting.append(key)
 
         return pending, still_waiting

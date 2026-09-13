@@ -4,16 +4,16 @@ import site
 import sys
 import time
 
+import usb.backend.libusb1
 import usb.core
 import usb.util
-import usb.backend.libusb1
 
 if sys.platform == "win32":
     from libusb._platform.windows import DLL_PATH
 else:
     DLL_PATH = None
 
-from aoa import find_accessory, find_device, toggle_accessory_mode
+from .aoa import find_accessory, find_device, toggle_accessory_mode
 
 # AOA vendor and product id stuff
 ACCESSORY_VID = 0x18D1
@@ -124,7 +124,7 @@ class USBHandler:
     def has_vendor_interface(self, dev):
         try:
             configs = dev.configs()
-        except Exception:
+        except Exception:  # noqa: BLE001 - device inspection can fail per backend
             return False
 
         for config in configs:
@@ -134,22 +134,23 @@ class USBHandler:
 
         return False
 
-    def is_phone_like(self, dev, name):
+    def is_known_device(self, dev, name):
         if dev.idVendor == ACCESSORY_VID and dev.idProduct in ACCESSORY_PIDS:
             return True
 
         low = name.lower()
 
-        phone_names = (
+        names = (
             "android",
             "essential",
             "ph-1",
+            "lenovo",
             "mata",
             "qualcomm",
             "google",
         )
 
-        if any(word in low for word in phone_names):
+        if any(word in low for word in names):
             return True
 
         return self.has_vendor_interface(dev)
@@ -157,14 +158,14 @@ class USBHandler:
     def find_options(self):
         self.init_backend()
 
-        phone = []
+        known = []
         others = []
 
         try:
             for dev in usb.core.find(find_all=True, backend=self._usb_backend):
                 try:
                     name = self.device_name(dev)
-                except Exception:
+                except Exception:  # noqa: BLE001 - one device must not abort scanning
                     name = ""
 
                 if name:
@@ -179,23 +180,23 @@ class USBHandler:
                     self._serial_number(dev),
                 )
 
-                if self.is_phone_like(dev, name):
-                    phone.append(entry)
+                if self.is_known_device(dev, name):
+                    known.append(entry)
                 else:
                     others.append(entry)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - normalize backend errors for callers
             raise RuntimeError(f"USB enumeration failed: {e}")
 
-        if phone:
-            return phone
+        if known:
+            return known
 
         return others
 
     def _serial_number(self, dev):
         try:
             return dev.serial_number or ""
-        except Exception:
+        except Exception:  # noqa: BLE001 - serial access is optional
             return ""
 
     def connect(self, vidpid, max_wait=5.0):
@@ -234,8 +235,7 @@ class USBHandler:
         if dev is None:
             raise RuntimeError(
                 "Could not enter Android accessory mode. "
-                "Check that the phone is plugged in, unlocked, and that this "
-                "phone was selected in the USB device list."
+                "Check that the device is plugged in, unlocked, and was selected"
             )
 
         self.device = dev
@@ -309,16 +309,42 @@ class USBHandler:
     def parse_line(self, line):
         data = json.loads(line)
 
+        if not isinstance(data, dict):
+            raise TypeError("USB message must be a JSON object")
+
+        action = data.get("action")
+        if action == "subscribe":
+            keys = data.get("keys")
+            if not isinstance(keys, list):
+                raise ValueError("subscribe action requires a keys list")
+            return {"action": "subscribe", "keys": keys}
+
+        if action == "put":
+            if "key" not in data or "value" not in data:
+                raise ValueError("put action requires key and value")
+            return {
+                "action": "put",
+                "key": data["key"],
+                "value": data["value"],
+            }
+
         if "subscribe" in data:
-            return ("subscribe", data.get("subscribe"))
+            keys = data.get("subscribe")
+            if not isinstance(keys, list):
+                raise ValueError("subscribe requires a list")
+            return {"action": "subscribe", "keys": keys}
 
         key = data.get("key")
-        value = data.get("value")
+        if key is not None and "value" in data:
+            return {"action": "put", "key": key, "value": data["value"]}
 
-        if key is None or value is None:
+        raise ValueError("USB message has no recognized action")
+
+    def receive_message(self, timeout=0.2, max_read=65536):
+        raw = self.receive_line(timeout=timeout, max_read=max_read)
+        if raw is None:
             return None
-
-        return ("put", {"key": key, "value": value})
+        return self.parse_line(raw.decode("utf-8", "replace").strip())
 
     def receive_line(self, timeout=0.2, max_read=65536):
         idx = self._recv_buf.find(b"\n")

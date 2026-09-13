@@ -53,7 +53,11 @@ def install_apk(apk_path, serial):
         result = device.shell(
             f"pm install -r {shlex.quote(remote_path)}",
             timeout_s=120,
-        ).strip()
+        )
+        if isinstance(result, bytes):
+            result = result.decode().strip()
+        else:
+            result = result.strip()
 
         if "Success" not in result:
             raise RuntimeError(result or "Package manager returned no result")
@@ -63,7 +67,7 @@ def install_apk(apk_path, serial):
         if device is not None:
             try:
                 device.shell(f"rm -f {shlex.quote(remote_path)}")
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - cleanup must not mask install result
                 pass
 
             device.close()
