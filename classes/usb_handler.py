@@ -134,22 +134,23 @@ class USBHandler:
 
         return False
 
-    def is_phone_like(self, dev, name):
+    def is_known_device(self, dev, name):
         if dev.idVendor == ACCESSORY_VID and dev.idProduct in ACCESSORY_PIDS:
             return True
 
         low = name.lower()
 
-        phone_names = (
+        names = (
             "android",
             "essential",
             "ph-1",
+            "lenovo",
             "mata",
             "qualcomm",
             "google",
         )
 
-        if any(word in low for word in phone_names):
+        if any(word in low for word in names):
             return True
 
         return self.has_vendor_interface(dev)
@@ -157,7 +158,7 @@ class USBHandler:
     def find_options(self):
         self.init_backend()
 
-        phone = []
+        known = []
         others = []
 
         try:
@@ -179,16 +180,16 @@ class USBHandler:
                     self._serial_number(dev),
                 )
 
-                if self.is_phone_like(dev, name):
-                    phone.append(entry)
+                if self.is_known_device(dev, name):
+                    known.append(entry)
                 else:
                     others.append(entry)
 
         except Exception as e:  # noqa: BLE001 - normalize backend errors for callers
             raise RuntimeError(f"USB enumeration failed: {e}")
 
-        if phone:
-            return phone
+        if known:
+            return known
 
         return others
 
@@ -234,8 +235,7 @@ class USBHandler:
         if dev is None:
             raise RuntimeError(
                 "Could not enter Android accessory mode. "
-                "Check that the phone is plugged in, unlocked, and that this "
-                "phone was selected in the USB device list."
+                "Check that the device is plugged in, unlocked, and was selected"
             )
 
         self.device = dev

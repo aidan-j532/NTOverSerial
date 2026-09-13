@@ -10,7 +10,7 @@ ACCESSORY_IDS = [
 
 
 def find_device(known_devices):
-    ids = set((v, p) for v, p in known_devices)
+    ids = set(known_devices)
     return usb.core.find(custom_match=lambda d: (d.idVendor, d.idProduct) in ids)
 
 
@@ -89,7 +89,7 @@ def toggle_accessory_mode(
         raise RuntimeError(f"AOA START_ACCESSORY failed: {e}") from e
     print("AOA START_ACCESSORY returned")
 
-    # The phone should now disconnect/re-enumerate.
+    # The device should now disconnect/re-enumerate.
     # Do not continue using the old PyUSB device object.
     try:
         usb.util.dispose_resources(device)
