@@ -4,16 +4,16 @@ import site
 import sys
 import time
 
+import usb.backend.libusb1
 import usb.core
 import usb.util
-import usb.backend.libusb1
 
 if sys.platform == "win32":
     from libusb._platform.windows import DLL_PATH
 else:
     DLL_PATH = None
 
-from aoa import find_accessory, find_device, toggle_accessory_mode
+from .aoa import find_accessory, find_device, toggle_accessory_mode
 
 # AOA vendor and product id stuff
 ACCESSORY_VID = 0x18D1
@@ -309,16 +309,42 @@ class USBHandler:
     def parse_line(self, line):
         data = json.loads(line)
 
+        if not isinstance(data, dict):
+            raise TypeError("USB message must be a JSON object")
+
+        action = data.get("action")
+        if action == "subscribe":
+            keys = data.get("keys")
+            if not isinstance(keys, list):
+                raise ValueError("subscribe action requires a keys list")
+            return {"action": "subscribe", "keys": keys}
+
+        if action == "put":
+            if "key" not in data or "value" not in data:
+                raise ValueError("put action requires key and value")
+            return {
+                "action": "put",
+                "key": data["key"],
+                "value": data["value"],
+            }
+
         if "subscribe" in data:
-            return ("subscribe", data.get("subscribe"))
+            keys = data.get("subscribe")
+            if not isinstance(keys, list):
+                raise ValueError("subscribe requires a list")
+            return {"action": "subscribe", "keys": keys}
 
         key = data.get("key")
-        value = data.get("value")
+        if key is not None and "value" in data:
+            return {"action": "put", "key": key, "value": data["value"]}
 
-        if key is None or value is None:
+        raise ValueError("USB message has no recognized action")
+
+    def receive_message(self, timeout=0.2, max_read=65536):
+        raw = self.receive_line(timeout=timeout, max_read=max_read)
+        if raw is None:
             return None
-
-        return ("put", {"key": key, "value": value})
+        return self.parse_line(raw.decode("utf-8", "replace").strip())
 
     def receive_line(self, timeout=0.2, max_read=65536):
         idx = self._recv_buf.find(b"\n")

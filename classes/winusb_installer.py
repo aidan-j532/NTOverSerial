@@ -1,7 +1,9 @@
 import ctypes
+import json
 import os
 import sys
 import tempfile
+import time
 
 
 class _WdiDeviceInfo(ctypes.Structure):
@@ -135,7 +137,7 @@ def _device_driver(device):
 
 
 def install_winusb_driver(vid, pid, description=None):
-    library, dll_handle = _load_library()
+    library, _dll_handle = _load_library()
 
     device_list = ctypes.POINTER(_WdiDeviceInfo)()
     list_options = _WdiCreateListOptions(1, 0, 1)
@@ -209,3 +211,81 @@ def install_winusb_driver(vid, pid, description=None):
                 )
     finally:
         library.wdi_destroy_list(device_list)
+
+
+def _run_elevated_winusb_install(vid, pid, description):
+    if sys.platform != "win32":
+        raise RuntimeError("WinUSB driver installation is only available on Windows")
+
+    request_fd, request_path = tempfile.mkstemp(
+        prefix="ntoveraoa-driver-request-", suffix=".json"
+    )
+    result_fd, result_path = tempfile.mkstemp(
+        prefix="ntoveraoa-driver-result-", suffix=".json"
+    )
+    os.close(request_fd)
+    os.close(result_fd)
+
+    try:
+        with open(request_path, "w", encoding="utf-8") as request_file:
+            json.dump(
+                {"vid": vid, "pid": pid, "description": description}, request_file
+            )
+
+        if getattr(sys, "frozen", False):
+            executable = sys.executable
+            parameters = f'--install-winusb-elevated "{request_path}" "{result_path}"'
+        else:
+            executable = sys.executable
+            script_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "run.py",
+            )
+            parameters = f'"{script_path}" --install-winusb-elevated "{request_path}" "{result_path}"'
+
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            executable,
+            parameters,
+            None,
+            0,
+        )
+        if result <= 32:
+            raise RuntimeError(f"Windows elevation failed with code {result}")
+
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            if os.path.getsize(result_path) > 0:
+                with open(result_path, "r", encoding="utf-8") as result_file:
+                    response = json.load(result_file)
+                if response.get("ok"):
+                    return
+                raise RuntimeError(response.get("error", "WinUSB installation failed"))
+            time.sleep(0.1)
+
+        raise RuntimeError("Timed out waiting for the elevated WinUSB installer")
+    finally:
+        for path in (request_path, result_path):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+
+def _handle_elevated_winusb_install(request_path, result_path):
+    try:
+        with open(request_path, "r", encoding="utf-8") as request_file:
+            request = json.load(request_file)
+
+        install_winusb_driver(
+            request["vid"],
+            request["pid"],
+            request["description"],
+        )
+        response = {"ok": True}
+    except Exception as error:  # noqa: BLE001 - serialize installer errors for the caller
+        response = {"ok": False, "error": str(error)}
+
+    with open(result_path, "w", encoding="utf-8") as result_file:
+        json.dump(response, result_file)
