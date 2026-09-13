@@ -118,8 +118,15 @@ class SchemaRegistry:
         self._aliases = {}
 
     def register(self, struct_name, schema):
-        self._fields[struct_name] = parse_schema(schema)
         self._schemas[struct_name] = schema
+
+        try:
+            fields = parse_schema(schema)
+        except (KeyError, TypeError, ValueError):
+            self._fields.pop(struct_name, None)
+            return False
+
+        self._fields[struct_name] = fields
         alias = None
         if struct_name.startswith("struct:"):
             alias = struct_name[len("struct:") :]
@@ -127,6 +134,8 @@ class SchemaRegistry:
             alias = struct_name[len("photonstruct:") :]
         if alias and alias not in self._fields and alias not in self._aliases:
             self._aliases[alias] = struct_name
+
+        return True
 
     def _resolve(self, name):
         if name in self._fields:
@@ -136,10 +145,18 @@ class SchemaRegistry:
     def has_type(self, type_str):
         if self._resolve(type_str) is not None:
             return True
-        return bool(type_str.endswith("[]") and self._resolve(type_str[:-2]) is not None)
+        return bool(
+            type_str.endswith("[]") and self._resolve(type_str[:-2]) is not None
+        )
 
     def get_schema(self, struct_name):
         base = struct_name.removesuffix("[]")
+
+        if struct_name in self._schemas:
+            return self._schemas[struct_name]
+        if base in self._schemas:
+            return self._schemas[base]
+
         resolved = self._resolve(base)
         return self._schemas.get(resolved) if resolved else None
 

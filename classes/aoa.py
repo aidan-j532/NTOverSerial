@@ -4,11 +4,13 @@ import usb.util
 # Android Open Accessory v2 devices may expose one of these PIDs depending on
 # whether ADB and/or audio are enabled. These are the modes that include the
 # bulk accessory interface; 2D02 and 2D03 are audio-only.
-ACCESSORY_IDS = [(0x18D1, product_id) for product_id in (0x2D00, 0x2D01, 0x2D04, 0x2D05)]
+ACCESSORY_IDS = [
+    (0x18D1, product_id) for product_id in (0x2D00, 0x2D01, 0x2D04, 0x2D05)
+]
 
 
 def find_device(known_devices):
-    ids = set((v, p) for v, p in known_devices)
+    ids = set(known_devices)
     return usb.core.find(custom_match=lambda d: (d.idVendor, d.idProduct) in ids)
 
 
@@ -87,9 +89,9 @@ def toggle_accessory_mode(
         raise RuntimeError(f"AOA START_ACCESSORY failed: {e}") from e
     print("AOA START_ACCESSORY returned")
 
-    # The phone should now disconnect/re-enumerate.
+    # The device should now disconnect/re-enumerate.
     # Do not continue using the old PyUSB device object.
     try:
         usb.util.dispose_resources(device)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - cleanup must not mask the AOA result
         pass
