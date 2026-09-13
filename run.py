@@ -14,10 +14,12 @@ import usb.core
 
 from classes.apk_installer import install_apk
 from classes.bridge import NTOverUSBBridge
-from classes.winusb_installer import (
-    _handle_elevated_winusb_install,
-    _run_elevated_winusb_install,
-)
+
+if sys.platform == "win32":
+    from classes.winusb_installer import (
+        _handle_elevated_winusb_install,
+        _run_elevated_winusb_install,
+    )
 
 
 class ConnectionState(Enum):
