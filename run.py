@@ -4,9 +4,12 @@ import threading
 import time
 import tkinter as tk
 from enum import Enum
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
-import crossfiledialog
+try:
+    import crossfiledialog
+except Exception:  # noqa: BLE001 - import raises NoImplementationFoundException
+    crossfiledialog = None
 import usb.core
 
 from classes.apk_installer import install_apk
@@ -258,9 +261,16 @@ class TKApp:
             self.usb_var.set(candidates[0][2])
 
     def _choose_apk(self):
-        path = crossfiledialog.open_file(
-            title="Select APK", start_dir=os.getcwd(), filter="*.apk"
-        )
+        if crossfiledialog is not None:
+            path = crossfiledialog.open_file(
+                title="Select APK", start_dir=os.getcwd(), filter="*.apk"
+            )
+        else:
+            path = filedialog.askopenfilename(
+                title="Select APK",
+                initialdir=os.getcwd(),
+                filetypes=[("APK files", "*.apk")],
+            )
 
         if path:
             self.apk_var.set(path)
